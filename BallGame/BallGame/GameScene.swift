@@ -8,11 +8,16 @@ final class GameScene: SKScene {
     private let ball = SKShapeNode(circleOfRadius: GameScene.ballRadius)
 
     private static let ballRadius: CGFloat = 26
-    /// How strongly tilting maps to gravity. Higher = ball feels heavier/faster.
-    private static let tiltStrength: Double = 18
+    /// How strongly tilting maps to rolling force. Higher = faster/heavier feel.
+    private static let tiltStrength: CGFloat = 40
 
     override func didMove(to view: SKView) {
         backgroundColor = SKColor(red: 0.07, green: 0.09, blue: 0.13, alpha: 1)
+
+        // The ball is driven by forces from the tilt sensor each frame, not by
+        // world gravity — force application also wakes a resting body, which
+        // gravity changes alone do not.
+        physicsWorld.gravity = .zero
 
         // Walls around the screen so the ball can't leave (until Milestone 3,
         // where an open edge lets it roll onto the neighboring phone).
@@ -22,7 +27,10 @@ final class GameScene: SKScene {
         setUpBall()
         setUpHintLabel()
 
-        motion.startAccelerometerUpdates()
+        // Device motion separates gravity from shakes, giving smooth tilt data.
+        motion.deviceMotionUpdateInterval = 1.0 / 60.0
+        motion.startDeviceMotionUpdates()
+        motion.startAccelerometerUpdates() // fallback source
     }
 
     private func setUpBall() {
@@ -34,7 +42,7 @@ final class GameScene: SKScene {
         let body = SKPhysicsBody(circleOfRadius: GameScene.ballRadius)
         body.restitution = 0.45   // bounce off walls
         body.friction = 0.15
-        body.linearDamping = 0.2  // slight rolling resistance so it settles
+        body.linearDamping = 0.3  // slight rolling resistance so it settles
         body.allowsRotation = true
         ball.physicsBody = body
 
@@ -57,12 +65,27 @@ final class GameScene: SKScene {
     }
 
     override func update(_ currentTime: TimeInterval) {
-        // Map device tilt to the scene's gravity. In portrait, the
-        // accelerometer's x/y axes line up with the screen's x/y axes.
-        guard let data = motion.accelerometerData else { return }
-        physicsWorld.gravity = CGVector(
-            dx: data.acceleration.x * GameScene.tiltStrength,
-            dy: data.acceleration.y * GameScene.tiltStrength
-        )
+        guard let body = ball.physicsBody, let tilt = currentTilt() else { return }
+
+        // In portrait, the device's x/y axes line up with the screen's x/y
+        // axes, so the gravity vector maps directly to a rolling force.
+        // Scaling by mass makes the feel independent of the ball's size.
+        body.applyForce(CGVector(
+            dx: tilt.dx * body.mass * GameScene.tiltStrength,
+            dy: tilt.dy * body.mass * GameScene.tiltStrength
+        ))
+    }
+
+    /// The direction gravity pulls, in the device's frame, in G units.
+    /// Prefers device motion (filtered, smooth); falls back to the raw
+    /// accelerometer if device motion isn't available yet.
+    private func currentTilt() -> CGVector? {
+        if let gravity = motion.deviceMotion?.gravity {
+            return CGVector(dx: gravity.x, dy: gravity.y)
+        }
+        if let acceleration = motion.accelerometerData?.acceleration {
+            return CGVector(dx: acceleration.x, dy: acceleration.y)
+        }
+        return nil
     }
 }
