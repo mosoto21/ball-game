@@ -6,6 +6,10 @@ final class GameScene: SKScene {
 
     private let motion = CMMotionManager()
     private let ball = SKShapeNode(circleOfRadius: GameScene.ballRadius)
+    private let sensorReadout = SKLabelNode()
+
+    /// Bumped on every code change so a stale build is obvious on screen.
+    private static let buildNumber = 3
 
     private static let ballRadius: CGFloat = 26
     /// How strongly tilting maps to rolling force. Higher = faster/heavier feel.
@@ -26,6 +30,7 @@ final class GameScene: SKScene {
 
         setUpBall()
         setUpHintLabel()
+        setUpDebugHUD()
 
         // Device motion separates gravity from shakes, giving smooth tilt data.
         motion.deviceMotionUpdateInterval = 1.0 / 60.0
@@ -64,8 +69,27 @@ final class GameScene: SKScene {
         ]))
     }
 
+    /// Temporary on-screen diagnostics while we debug the tilt controls.
+    private func setUpDebugHUD() {
+        sensorReadout.fontName = "Menlo"
+        sensorReadout.fontSize = 14
+        sensorReadout.fontColor = SKColor(white: 1, alpha: 0.6)
+        sensorReadout.position = CGPoint(x: frame.midX, y: frame.minY + 50)
+        sensorReadout.text = "build \(GameScene.buildNumber) — starting sensors…"
+        addChild(sensorReadout)
+    }
+
     override func update(_ currentTime: TimeInterval) {
-        guard let body = ball.physicsBody, let tilt = currentTilt() else { return }
+        guard let tilt = currentTilt() else {
+            sensorReadout.text = "build \(GameScene.buildNumber) — NO SENSOR DATA"
+            return
+        }
+        sensorReadout.text = String(
+            format: "build %d — tilt x %+.2f  y %+.2f",
+            GameScene.buildNumber, tilt.dx, tilt.dy
+        )
+
+        guard let body = ball.physicsBody else { return }
 
         // In portrait, the device's x/y axes line up with the screen's x/y
         // axes, so the gravity vector maps directly to a rolling force.
