@@ -12,11 +12,13 @@ final class GameScene: SKScene {
     private var lastUpdateTime: TimeInterval?
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 4
+    private static let buildNumber = 5
 
     private static let ballRadius: CGFloat = 26
     /// How strongly tilting maps to rolling force. Higher = faster/heavier feel.
-    private static let tiltStrength: CGFloat = 130
+    /// Tuned toward Kirby Tilt 'n' Tumble: small tilts already move the ball
+    /// briskly and it darts across the screen on a firm lean.
+    private static let tiltStrength: CGFloat = 420
     /// Grid spacing of the dots on the ball's surface.
     private static let dotSpacing: CGFloat = 19
 
