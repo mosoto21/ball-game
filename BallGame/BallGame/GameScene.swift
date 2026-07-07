@@ -12,18 +12,20 @@ final class GameScene: SKScene {
     private var lastUpdateTime: TimeInterval?
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 6
+    private static let buildNumber = 7
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
     /// ball chases it hard, so response is near-instant in both directions.
-    /// Points per second of ball speed for each G of sideways tilt.
-    private static let speedPerTilt: CGFloat = 3400
+    /// Points per second of ball speed for each G of sideways tilt. A relaxed
+    /// ~15° hand tilt gives a comfortable rolling pace; steep tilts get quick
+    /// without becoming a blur.
+    private static let speedPerTilt: CGFloat = 1500
     /// Hard cap so a vertical phone doesn't launch the ball into hyperspace.
-    private static let maxSpeed: CGFloat = 1700
+    private static let maxSpeed: CGFloat = 1100
     /// How aggressively the velocity converges on the target, per second.
     /// Higher = snappier response but bounces die out faster.
-    private static let responsiveness: CGFloat = 9
+    private static let responsiveness: CGFloat = 6.5
     /// Ignore tilt below this (in G) so the ball doesn't drift on a table.
     private static let deadZone: CGFloat = 0.02
     /// Grid spacing of the dots on the ball's surface.
