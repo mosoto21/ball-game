@@ -6,13 +6,17 @@ final class GameScene: SKScene {
 
     private let motion = CMMotionManager()
     private let ball = SKShapeNode(circleOfRadius: GameScene.ballRadius)
+    private let shadow = SKShapeNode(circleOfRadius: GameScene.ballRadius)
+    /// True while the ball is in the air after a hop; tilt steering is
+    /// suspended so the flight feels ballistic.
+    private var isAirborne = false
     /// Dot pattern inside the ball; scrolling it with the velocity makes the
     /// ball read as rolling when seen from above.
     private let dotPattern = SKNode()
     private var lastUpdateTime: TimeInterval?
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 7
+    private static let buildNumber = 8
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -28,6 +32,11 @@ final class GameScene: SKScene {
     private static let responsiveness: CGFloat = 6.5
     /// Ignore tilt below this (in G) so the ball doesn't drift on a table.
     private static let deadZone: CGFloat = 0.02
+    /// Upward jerk (in G, along the axis out of the screen) that triggers a
+    /// hop — a quick upward pop of the phone, Kirby Tilt 'n' Tumble style.
+    private static let hopThreshold: Double = 0.75
+    /// Time the ball spends in the air.
+    private static let hopDuration: TimeInterval = 0.55
     /// Grid spacing of the dots on the ball's surface.
     private static let dotSpacing: CGFloat = 19
 
@@ -44,6 +53,7 @@ final class GameScene: SKScene {
         physicsBody = SKPhysicsBody(edgeLoopFrom: frame)
         physicsBody?.friction = 0.1
 
+        setUpShadow()
         setUpBall()
         setUpBuildLabel()
 
@@ -67,7 +77,18 @@ final class GameScene: SKScene {
 
         ball.addChild(makeSurfacePattern())
         ball.addChild(makeShading())
+        ball.zPosition = 10
         addChild(ball)
+    }
+
+    /// Soft drop shadow on the "floor". It tracks the ball's position; during
+    /// a hop the ball grows while the shadow shrinks, selling the height.
+    private func setUpShadow() {
+        shadow.fillColor = SKColor(white: 0, alpha: 0.35)
+        shadow.strokeColor = .clear
+        shadow.zPosition = 5
+        shadow.position = CGPoint(x: frame.midX, y: frame.midY)
+        addChild(shadow)
     }
 
     /// Darker dots clipped to the ball's circle. Scrolled every frame to fake
@@ -134,7 +155,19 @@ final class GameScene: SKScene {
 
         guard let body = ball.physicsBody else { return }
 
-        if var tilt = currentTilt() {
+        // A sharp upward pop of the phone (acceleration out of the screen,
+        // beyond gravity) launches the ball into a hop.
+        if !isAirborne,
+           let jerk = motion.deviceMotion?.userAcceleration.z,
+           jerk > GameScene.hopThreshold {
+            hop()
+        }
+
+        shadow.position = CGPoint(x: ball.position.x, y: ball.position.y - 4)
+
+        // While airborne the ball keeps its launch velocity — you can't
+        // steer a ball that isn't touching the ground.
+        if !isAirborne, var tilt = currentTilt() {
             if abs(tilt.dx) < GameScene.deadZone { tilt.dx = 0 }
             if abs(tilt.dy) < GameScene.deadZone { tilt.dy = 0 }
 
@@ -159,6 +192,37 @@ final class GameScene: SKScene {
         }
 
         scrollSurfacePattern(velocity: body.velocity, dt: dt)
+    }
+
+    /// Pop the ball into the air: it grows (closer to the viewer) while its
+    /// shadow shrinks, then lands with a small squash.
+    private func hop() {
+        isAirborne = true
+        let half = GameScene.hopDuration / 2
+
+        let rise = SKAction.scale(to: 1.45, duration: half)
+        rise.timingMode = .easeOut
+        let fall = SKAction.scale(to: 1.0, duration: half)
+        fall.timingMode = .easeIn
+        let squash = SKAction.sequence([
+            .scaleX(to: 1.12, y: 0.88, duration: 0.06),
+            .scaleX(to: 1.0, y: 1.0, duration: 0.09),
+        ])
+        ball.run(.sequence([rise, fall, squash])) { [weak self] in
+            self?.isAirborne = false
+        }
+
+        let shadowOut = SKAction.group([
+            .scale(to: 0.55, duration: half),
+            .fadeAlpha(to: 0.15, duration: half),
+        ])
+        shadowOut.timingMode = .easeOut
+        let shadowIn = SKAction.group([
+            .scale(to: 1.0, duration: half),
+            .fadeAlpha(to: 1.0, duration: half),
+        ])
+        shadowIn.timingMode = .easeIn
+        shadow.run(.sequence([shadowOut, shadowIn]))
     }
 
     /// Seen from above, a rolling ball's top surface moves in the direction of
