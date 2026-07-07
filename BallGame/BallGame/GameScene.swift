@@ -7,7 +7,7 @@ final class GameScene: SKScene {
 
     private let motion = CMMotionManager()
     private let ball = SKShapeNode(circleOfRadius: GameScene.ballRadius)
-    private let shadow = SKShapeNode(circleOfRadius: GameScene.ballRadius)
+    private let shadow = SKSpriteNode(texture: GameScene.softShadowTexture(radius: GameScene.ballRadius))
     /// True while the ball is in the air after a hop; tilt steering is
     /// suspended so the flight feels ballistic.
     private var isAirborne = false
@@ -19,7 +19,7 @@ final class GameScene: SKScene {
     /// Deep thud when the ball drops into a hole.
     private let fallHaptic = UIImpactFeedbackGenerator(style: .heavy)
     /// Holes currently open on the floor.
-    private var holes: [SKShapeNode] = []
+    private var holes: [SKSpriteNode] = []
     /// True while the ball is dropping into a hole / respawning.
     private var isFalling = false
     /// Dot pattern inside the ball; scrolling it with the velocity makes the
@@ -28,7 +28,7 @@ final class GameScene: SKScene {
     private var lastUpdateTime: TimeInterval?
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 12
+    private static let buildNumber = 13
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -65,7 +65,7 @@ final class GameScene: SKScene {
     private static let dotSpacing: CGFloat = 19
 
     override func didMove(to view: SKView) {
-        backgroundColor = SKColor(red: 0.07, green: 0.09, blue: 0.13, alpha: 1)
+        setUpBackground()
 
         // The ball is driven by forces from the tilt sensor each frame, not by
         // world gravity — force application also wakes a resting body, which
@@ -101,7 +101,7 @@ final class GameScene: SKScene {
         ball.physicsBody = body
 
         ball.addChild(makeSurfacePattern())
-        ball.addChild(makeShading())
+        ball.addChild(SKSpriteNode(texture: GameScene.ballGlossTexture(radius: GameScene.ballRadius)))
         ball.zPosition = 10
         addChild(ball)
     }
@@ -109,8 +109,6 @@ final class GameScene: SKScene {
     /// Soft drop shadow on the "floor". It tracks the ball's position; during
     /// a hop the ball grows while the shadow shrinks, selling the height.
     private func setUpShadow() {
-        shadow.fillColor = SKColor(white: 0, alpha: 0.35)
-        shadow.strokeColor = .clear
         shadow.zPosition = 5
         shadow.position = CGPoint(x: frame.midX, y: frame.midY)
         addChild(shadow)
@@ -144,32 +142,195 @@ final class GameScene: SKScene {
         return crop
     }
 
-    /// A fixed highlight and rim shadow that don't move with the surface,
-    /// selling the illusion of a lit 3D sphere.
-    private func makeShading() -> SKNode {
-        let shading = SKNode()
+    // MARK: - Procedural textures (the "real world" look, drawn in code)
 
-        let rim = SKShapeNode(circleOfRadius: GameScene.ballRadius - 1)
-        rim.fillColor = .clear
-        rim.strokeColor = SKColor(red: 0.4, green: 0.1, blue: 0.0, alpha: 0.55)
-        rim.lineWidth = 5
-        shading.addChild(rim)
+    /// Warm wooden tabletop: planks with grain lines and a soft vignette.
+    private func setUpBackground() {
+        let background = SKSpriteNode(texture: GameScene.woodTexture(size: frame.size))
+        background.position = CGPoint(x: frame.midX, y: frame.midY)
+        background.zPosition = 0
+        addChild(background)
+    }
 
-        let highlight = SKShapeNode(circleOfRadius: 8)
-        highlight.fillColor = SKColor(white: 1, alpha: 0.5)
-        highlight.strokeColor = .clear
-        highlight.position = CGPoint(x: -9, y: 10)
-        highlight.setScale(1.2)
-        shading.addChild(highlight)
+    private static func woodTexture(size: CGSize) -> SKTexture {
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            let c = ctx.cgContext
 
-        return shading
+            let plankWidth: CGFloat = 92
+            var x: CGFloat = 0
+            while x < size.width {
+                // Each plank gets its own slight tint.
+                let shade = CGFloat.random(in: -0.045...0.045)
+                UIColor(
+                    red: 0.74 + shade,
+                    green: 0.56 + shade * 0.9,
+                    blue: 0.38 + shade * 0.8,
+                    alpha: 1
+                ).setFill()
+                c.fill(CGRect(x: x, y: 0, width: plankWidth, height: size.height))
+
+                // Wavy grain lines running down the plank.
+                for _ in 0..<16 {
+                    let grainX = x + CGFloat.random(in: 6...(plankWidth - 6))
+                    let path = UIBezierPath()
+                    path.move(to: CGPoint(x: grainX, y: -10))
+                    var y: CGFloat = -10
+                    var wobbleX = grainX
+                    while y < size.height + 10 {
+                        let nextY = y + CGFloat.random(in: 60...140)
+                        let nextX = min(max(wobbleX + CGFloat.random(in: -7...7), x + 3),
+                                        x + plankWidth - 3)
+                        path.addQuadCurve(
+                            to: CGPoint(x: nextX, y: nextY),
+                            controlPoint: CGPoint(x: wobbleX + CGFloat.random(in: -8...8),
+                                                  y: (y + nextY) / 2)
+                        )
+                        wobbleX = nextX
+                        y = nextY
+                    }
+                    UIColor(red: 0.45, green: 0.32, blue: 0.20,
+                            alpha: CGFloat.random(in: 0.05...0.14)).setStroke()
+                    path.lineWidth = CGFloat.random(in: 0.8...2.2)
+                    path.stroke()
+                }
+
+                // Seam between planks.
+                UIColor(white: 0, alpha: 0.22).setFill()
+                c.fill(CGRect(x: x + plankWidth - 1.5, y: 0, width: 1.5, height: size.height))
+                x += plankWidth
+            }
+
+            // Vignette so the edges recede like a lit tabletop.
+            if let vignette = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: [UIColor.clear.cgColor,
+                         UIColor(white: 0, alpha: 0.30).cgColor] as CFArray,
+                locations: [0, 1]
+            ) {
+                let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                c.drawRadialGradient(
+                    vignette,
+                    startCenter: center,
+                    startRadius: min(size.width, size.height) * 0.35,
+                    endCenter: center,
+                    endRadius: hypot(size.width, size.height) * 0.55,
+                    options: .drawsAfterEndLocation
+                )
+            }
+        }
+        return SKTexture(image: image)
+    }
+
+    /// Sphere shading: a bright sheen toward the light and a soft falloff
+    /// into shadow on the far side, overlaid on the flat ball color.
+    private static func ballGlossTexture(radius: CGFloat) -> SKTexture {
+        let diameter = radius * 2
+        let size = CGSize(width: diameter, height: diameter)
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            let c = ctx.cgContext
+            c.addEllipse(in: CGRect(origin: .zero, size: size))
+            c.clip()
+
+            if let shade = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: [UIColor.clear.cgColor,
+                         UIColor(red: 0.25, green: 0.05, blue: 0, alpha: 0.5).cgColor] as CFArray,
+                locations: [0, 1]
+            ) {
+                c.drawRadialGradient(
+                    shade,
+                    startCenter: CGPoint(x: diameter * 0.38, y: diameter * 0.34),
+                    startRadius: radius * 0.25,
+                    endCenter: CGPoint(x: diameter * 0.5, y: diameter * 0.55),
+                    endRadius: radius * 1.45,
+                    options: .drawsAfterEndLocation
+                )
+            }
+
+            if let sheen = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: [UIColor(white: 1, alpha: 0.7).cgColor,
+                         UIColor(white: 1, alpha: 0).cgColor] as CFArray,
+                locations: [0, 1]
+            ) {
+                let lightCenter = CGPoint(x: diameter * 0.34, y: diameter * 0.28)
+                c.drawRadialGradient(
+                    sheen,
+                    startCenter: lightCenter, startRadius: 0,
+                    endCenter: lightCenter, endRadius: radius * 0.8,
+                    options: []
+                )
+            }
+        }
+        return SKTexture(image: image)
+    }
+
+    /// Soft-edged drop shadow, like light diffusing under a real ball.
+    private static func softShadowTexture(radius: CGFloat) -> SKTexture {
+        let diameter = radius * 2.7
+        let size = CGSize(width: diameter, height: diameter)
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            if let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: [UIColor(white: 0, alpha: 0.42).cgColor,
+                         UIColor(white: 0, alpha: 0).cgColor] as CFArray,
+                locations: [0, 1]
+            ) {
+                let center = CGPoint(x: diameter / 2, y: diameter / 2)
+                ctx.cgContext.drawRadialGradient(
+                    gradient,
+                    startCenter: center, startRadius: radius * 0.3,
+                    endCenter: center, endRadius: diameter / 2,
+                    options: []
+                )
+            }
+        }
+        return SKTexture(image: image)
+    }
+
+    /// A hole bored into the wood: deep dark center, warm walls near the
+    /// rim, and a faint lit inner wall opposite the light.
+    private static func holeTexture(radius: CGFloat) -> SKTexture {
+        let diameter = radius * 2
+        let size = CGSize(width: diameter, height: diameter)
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            let c = ctx.cgContext
+            c.addEllipse(in: CGRect(origin: .zero, size: size))
+            c.clip()
+
+            if let depth = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: [UIColor(red: 0.02, green: 0.015, blue: 0.01, alpha: 1).cgColor,
+                         UIColor(red: 0.18, green: 0.12, blue: 0.07, alpha: 1).cgColor] as CFArray,
+                locations: [0, 1]
+            ) {
+                let center = CGPoint(x: diameter / 2, y: diameter / 2)
+                c.drawRadialGradient(
+                    depth,
+                    startCenter: center, startRadius: radius * 0.15,
+                    endCenter: center, endRadius: radius,
+                    options: []
+                )
+            }
+
+            // Inner wall catching a little light at the bottom edge.
+            let lit = UIBezierPath(
+                arcCenter: CGPoint(x: diameter / 2, y: diameter / 2),
+                radius: radius - 2.5,
+                startAngle: .pi * 0.15, endAngle: .pi * 0.85, clockwise: true
+            )
+            UIColor(red: 0.55, green: 0.4, blue: 0.25, alpha: 0.35).setStroke()
+            lit.lineWidth = 2.5
+            lit.stroke()
+        }
+        return SKTexture(image: image)
     }
 
     private func setUpBuildLabel() {
         let label = SKLabelNode(text: "build \(GameScene.buildNumber)")
         label.fontName = "Menlo"
         label.fontSize = 12
-        label.fontColor = SKColor(white: 1, alpha: 0.25)
+        label.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.45)
         label.position = CGPoint(x: frame.midX, y: frame.minY + 40)
         addChild(label)
     }
@@ -310,23 +471,12 @@ final class GameScene: SKScene {
             }
         }
 
-        let hole = SKShapeNode(circleOfRadius: GameScene.holeRadius)
-        hole.fillColor = SKColor(red: 0.01, green: 0.01, blue: 0.03, alpha: 1)
-        hole.strokeColor = SKColor(white: 0, alpha: 0.8)
-        hole.lineWidth = 4
+        let hole = SKSpriteNode(texture: GameScene.holeTexture(radius: GameScene.holeRadius))
         hole.position = position
         hole.zPosition = 2
         hole.setScale(0)
         addChild(hole)
         holes.append(hole)
-
-        // Subtle inner crescent so the hole reads as depth, not a black dot.
-        let glint = SKShapeNode(circleOfRadius: GameScene.holeRadius - 6)
-        glint.fillColor = .clear
-        glint.strokeColor = SKColor(white: 1, alpha: 0.10)
-        glint.lineWidth = 2
-        glint.position = CGPoint(x: 0, y: -3)
-        hole.addChild(glint)
 
         let open = SKAction.scale(to: 1.0, duration: 0.25)
         open.timingMode = .easeOut
@@ -344,7 +494,7 @@ final class GameScene: SKScene {
     }
 
     /// The ball got over an open hole: suck it in, then respawn at center.
-    private func fall(into hole: SKShapeNode) {
+    private func fall(into hole: SKSpriteNode) {
         isFalling = true
         fallHaptic.impactOccurred()
         ball.physicsBody?.velocity = .zero
@@ -381,7 +531,7 @@ final class GameScene: SKScene {
         ring.position = ball.position
         ring.zPosition = 4
         ring.fillColor = .clear
-        ring.strokeColor = SKColor(white: 1, alpha: 0.55)
+        ring.strokeColor = SKColor(red: 0.93, green: 0.86, blue: 0.72, alpha: 0.65)
         ring.lineWidth = 3
         ring.setScale(0.6)
         addChild(ring)
@@ -396,7 +546,7 @@ final class GameScene: SKScene {
         // A few dust specks kicked out from under the ball.
         for _ in 0..<8 {
             let speck = SKShapeNode(circleOfRadius: CGFloat.random(in: 1.5...3))
-            speck.fillColor = SKColor(white: 0.85, alpha: 0.5)
+            speck.fillColor = SKColor(red: 0.93, green: 0.86, blue: 0.72, alpha: 0.55)
             speck.strokeColor = .clear
             speck.position = ball.position
             speck.zPosition = 4
