@@ -12,13 +12,20 @@ final class GameScene: SKScene {
     private var lastUpdateTime: TimeInterval?
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 5
+    private static let buildNumber = 6
 
     private static let ballRadius: CGFloat = 26
-    /// How strongly tilting maps to rolling force. Higher = faster/heavier feel.
-    /// Tuned toward Kirby Tilt 'n' Tumble: small tilts already move the ball
-    /// briskly and it darts across the screen on a firm lean.
-    private static let tiltStrength: CGFloat = 420
+    /// Kirby-style direct control: the tilt sets a target velocity and the
+    /// ball chases it hard, so response is near-instant in both directions.
+    /// Points per second of ball speed for each G of sideways tilt.
+    private static let speedPerTilt: CGFloat = 3400
+    /// Hard cap so a vertical phone doesn't launch the ball into hyperspace.
+    private static let maxSpeed: CGFloat = 1700
+    /// How aggressively the velocity converges on the target, per second.
+    /// Higher = snappier response but bounces die out faster.
+    private static let responsiveness: CGFloat = 9
+    /// Ignore tilt below this (in G) so the ball doesn't drift on a table.
+    private static let deadZone: CGFloat = 0.02
     /// Grid spacing of the dots on the ball's surface.
     private static let dotSpacing: CGFloat = 19
 
@@ -125,14 +132,28 @@ final class GameScene: SKScene {
 
         guard let body = ball.physicsBody else { return }
 
-        if let tilt = currentTilt() {
-            // In portrait, the device's x/y axes line up with the screen's x/y
-            // axes, so the gravity vector maps directly to a rolling force.
-            // Scaling by mass makes the feel independent of the ball's size.
-            body.applyForce(CGVector(
-                dx: tilt.dx * body.mass * GameScene.tiltStrength,
-                dy: tilt.dy * body.mass * GameScene.tiltStrength
-            ))
+        if var tilt = currentTilt() {
+            if abs(tilt.dx) < GameScene.deadZone { tilt.dx = 0 }
+            if abs(tilt.dy) < GameScene.deadZone { tilt.dy = 0 }
+
+            // In portrait, the device's x/y axes line up with the screen's
+            // x/y axes, so the tilt maps directly to a screen-space target
+            // velocity that the ball converges on.
+            var target = CGVector(
+                dx: tilt.dx * GameScene.speedPerTilt,
+                dy: tilt.dy * GameScene.speedPerTilt
+            )
+            let speed = hypot(target.dx, target.dy)
+            if speed > GameScene.maxSpeed {
+                target.dx *= GameScene.maxSpeed / speed
+                target.dy *= GameScene.maxSpeed / speed
+            }
+
+            let blend = min(1, GameScene.responsiveness * dt)
+            body.velocity = CGVector(
+                dx: body.velocity.dx + (target.dx - body.velocity.dx) * blend,
+                dy: body.velocity.dy + (target.dy - body.velocity.dy) * blend
+            )
         }
 
         scrollSurfacePattern(velocity: body.velocity, dt: dt)
