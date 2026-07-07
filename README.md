@@ -7,8 +7,10 @@ and catch it when it falls through a hole. Full concept in
 ## Current status
 
 - ✅ **Milestone 1** — one phone, one ball: tilt the phone and the ball rolls
-  and bounces off the screen edges.
-- ⬜ Milestone 2 — holes the ball can fall into
+  and bounces off the screen edges. Flick the phone up and the ball hops
+  (and can jump over holes); landings have haptics and dust effects.
+- ✅ **Milestone 2** — holes open and close on the floor; a grounded ball
+  rolling over one is sucked in and respawns at the center.
 - ⬜ Milestone 3 — ball rolls between two phones placed side by side
 - ⬜ Milestone 4 — catch the falling ball with a phone held underneath
 

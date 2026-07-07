@@ -16,13 +16,19 @@ final class GameScene: SKScene {
     private var lastHopTime: TimeInterval = -.infinity
     /// Thump felt in the hand when the ball lands.
     private let landingHaptic = UIImpactFeedbackGenerator(style: .medium)
+    /// Deep thud when the ball drops into a hole.
+    private let fallHaptic = UIImpactFeedbackGenerator(style: .heavy)
+    /// Holes currently open on the floor.
+    private var holes: [SKShapeNode] = []
+    /// True while the ball is dropping into a hole / respawning.
+    private var isFalling = false
     /// Dot pattern inside the ball; scrolling it with the velocity makes the
     /// ball read as rolling when seen from above.
     private let dotPattern = SKNode()
     private var lastUpdateTime: TimeInterval?
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 11
+    private static let buildNumber = 12
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -49,6 +55,12 @@ final class GameScene: SKScene {
     /// Quiet period after a hop starts before another may trigger, so the
     /// catch-jolt at the end of the flick doesn't fire a second hop.
     private static let hopCooldown: TimeInterval = 1.0
+    /// Radius of a hole in the floor.
+    private static let holeRadius: CGFloat = 34
+    /// How long a hole stays fully open before closing again.
+    private static let holeLifetime: TimeInterval = 6.0
+    /// Average pause between hole spawns (varies ±3 s).
+    private static let holeSpawnInterval: TimeInterval = 5.0
     /// Grid spacing of the dots on the ball's surface.
     private static let dotSpacing: CGFloat = 19
 
@@ -68,6 +80,7 @@ final class GameScene: SKScene {
         setUpShadow()
         setUpBall()
         setUpBuildLabel()
+        startSpawningHoles()
 
         // Device motion separates gravity from shakes, giving smooth tilt data.
         motion.deviceMotionUpdateInterval = 1.0 / 60.0
@@ -169,7 +182,7 @@ final class GameScene: SKScene {
 
         // A sharp upward pop of the phone (acceleration out of the screen,
         // beyond gravity) launches the ball into a hop.
-        if !isAirborne,
+        if !isAirborne, !isFalling,
            currentTime - lastHopTime > GameScene.hopCooldown,
            let jerk = motion.deviceMotion?.userAcceleration.z,
            jerk > GameScene.hopThreshold {
@@ -179,9 +192,24 @@ final class GameScene: SKScene {
 
         shadow.position = CGPoint(x: ball.position.x, y: ball.position.y - 4)
 
+        // A grounded ball rolling over an open hole falls in; a hopping ball
+        // sails right over it.
+        if !isAirborne, !isFalling {
+            for hole in holes where hole.xScale > 0.9 {
+                let distance = hypot(
+                    ball.position.x - hole.position.x,
+                    ball.position.y - hole.position.y
+                )
+                if distance < GameScene.holeRadius * 0.8 {
+                    fall(into: hole)
+                    break
+                }
+            }
+        }
+
         // While airborne the ball keeps its launch velocity — you can't
         // steer a ball that isn't touching the ground.
-        if !isAirborne, var tilt = currentTilt() {
+        if !isAirborne, !isFalling, var tilt = currentTilt() {
             if abs(tilt.dx) < GameScene.deadZone { tilt.dx = 0 }
             if abs(tilt.dy) < GameScene.deadZone { tilt.dy = 0 }
 
@@ -256,6 +284,91 @@ final class GameScene: SKScene {
         ])
         shadowIn.timingMode = .easeIn
         shadow.run(.sequence([shadowOut, shadowIn]))
+    }
+
+    // MARK: - Holes
+
+    private func startSpawningHoles() {
+        run(.repeatForever(.sequence([
+            .wait(forDuration: GameScene.holeSpawnInterval, withRange: 6.0),
+            .run { [weak self] in self?.spawnHole() },
+        ])))
+    }
+
+    /// Open a hole at a random spot (never right under the ball), let it
+    /// linger, then close it.
+    private func spawnHole() {
+        let inset = GameScene.holeRadius + 30
+        var position = CGPoint.zero
+        for _ in 0..<12 {
+            position = CGPoint(
+                x: CGFloat.random(in: (frame.minX + inset)...(frame.maxX - inset)),
+                y: CGFloat.random(in: (frame.minY + inset)...(frame.maxY - inset))
+            )
+            if hypot(position.x - ball.position.x, position.y - ball.position.y) > 140 {
+                break
+            }
+        }
+
+        let hole = SKShapeNode(circleOfRadius: GameScene.holeRadius)
+        hole.fillColor = SKColor(red: 0.01, green: 0.01, blue: 0.03, alpha: 1)
+        hole.strokeColor = SKColor(white: 0, alpha: 0.8)
+        hole.lineWidth = 4
+        hole.position = position
+        hole.zPosition = 2
+        hole.setScale(0)
+        addChild(hole)
+        holes.append(hole)
+
+        // Subtle inner crescent so the hole reads as depth, not a black dot.
+        let glint = SKShapeNode(circleOfRadius: GameScene.holeRadius - 6)
+        glint.fillColor = .clear
+        glint.strokeColor = SKColor(white: 1, alpha: 0.10)
+        glint.lineWidth = 2
+        glint.position = CGPoint(x: 0, y: -3)
+        hole.addChild(glint)
+
+        let open = SKAction.scale(to: 1.0, duration: 0.25)
+        open.timingMode = .easeOut
+        let close = SKAction.scale(to: 0, duration: 0.25)
+        close.timingMode = .easeIn
+        hole.run(.sequence([
+            open,
+            .wait(forDuration: GameScene.holeLifetime),
+            close,
+            .run { [weak self, weak hole] in
+                if let hole { self?.holes.removeAll { $0 === hole } }
+            },
+            .removeFromParent(),
+        ]))
+    }
+
+    /// The ball got over an open hole: suck it in, then respawn at center.
+    private func fall(into hole: SKShapeNode) {
+        isFalling = true
+        fallHaptic.impactOccurred()
+        ball.physicsBody?.velocity = .zero
+
+        let suck = SKAction.group([
+            .move(to: hole.position, duration: 0.12),
+            .scale(to: 0.08, duration: 0.3),
+            .fadeOut(withDuration: 0.3),
+        ])
+        suck.timingMode = .easeIn
+
+        let respawn = SKAction.run { [weak self] in
+            guard let self else { return }
+            self.ball.position = CGPoint(x: self.frame.midX, y: self.frame.midY)
+            self.ball.setScale(0.3)
+            self.ball.run(.group([
+                .scale(to: 1.0, duration: 0.25),
+                .fadeIn(withDuration: 0.2),
+            ])) { self.isFalling = false }
+            self.shadow.run(.fadeIn(withDuration: 0.2))
+        }
+
+        shadow.run(.fadeOut(withDuration: 0.2))
+        ball.run(.sequence([suck, .wait(forDuration: 0.6), respawn]))
     }
 
     /// Landing impact: haptic thump and a dust-ring shockwave rippling out
