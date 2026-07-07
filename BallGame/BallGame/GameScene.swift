@@ -19,7 +19,7 @@ final class GameScene: SKScene {
     private var lastUpdateTime: TimeInterval?
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 9
+    private static let buildNumber = 10
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -33,6 +33,9 @@ final class GameScene: SKScene {
     /// How aggressively the velocity converges on the target, per second.
     /// Higher = snappier response but bounces die out faster.
     private static let responsiveness: CGFloat = 6.5
+    /// Ceiling on how fast the speed may change (points/s per second), so
+    /// sharp reversals stay smooth instead of doubling the kick.
+    private static let maxAcceleration: CGFloat = 3200
     /// Ignore tilt below this (in G) so the ball doesn't drift on a table.
     private static let deadZone: CGFloat = 0.02
     /// Upward jerk (in G, along the axis out of the screen) that triggers a
@@ -188,9 +191,22 @@ final class GameScene: SKScene {
             }
 
             let blend = min(1, GameScene.responsiveness * dt)
+            var deltaX = (target.dx - body.velocity.dx) * blend
+            var deltaY = (target.dy - body.velocity.dy) * blend
+
+            // Cap the per-frame speed change so reversing direction ramps up
+            // like starting from rest instead of whipping around at double
+            // the usual acceleration.
+            let maxDelta = GameScene.maxAcceleration * dt
+            let delta = hypot(deltaX, deltaY)
+            if delta > maxDelta, delta > 0 {
+                deltaX *= maxDelta / delta
+                deltaY *= maxDelta / delta
+            }
+
             body.velocity = CGVector(
-                dx: body.velocity.dx + (target.dx - body.velocity.dx) * blend,
-                dy: body.velocity.dy + (target.dy - body.velocity.dy) * blend
+                dx: body.velocity.dx + deltaX,
+                dy: body.velocity.dy + deltaY
             )
         }
 
@@ -217,9 +233,9 @@ final class GameScene: SKScene {
             .scaleX(to: 0.94, y: 1.06, duration: 0.08),
             .scaleX(to: 1.0, y: 1.0, duration: 0.07),
         ])
-        ball.run(.sequence([rise, fall, land, squash])) { [weak self] in
-            self?.isAirborne = false
-        }
+        // Steering returns at touchdown (in didLand); the squash afterwards
+        // is purely cosmetic.
+        ball.run(.sequence([rise, fall, land, squash]))
 
         let shadowOut = SKAction.group([
             .scale(to: 0.55, duration: half),
@@ -237,6 +253,7 @@ final class GameScene: SKScene {
     /// Landing impact: haptic thump and a dust-ring shockwave rippling out
     /// across the floor from the touchdown point.
     private func didLand() {
+        isAirborne = false
         landingHaptic.impactOccurred()
 
         let ring = SKShapeNode(circleOfRadius: GameScene.ballRadius)
