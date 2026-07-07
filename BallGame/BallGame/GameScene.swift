@@ -1,5 +1,6 @@
 import SpriteKit
 import CoreMotion
+import UIKit
 
 /// Milestone 1: a single ball on a single phone that rolls when you tilt the device.
 final class GameScene: SKScene {
@@ -10,13 +11,15 @@ final class GameScene: SKScene {
     /// True while the ball is in the air after a hop; tilt steering is
     /// suspended so the flight feels ballistic.
     private var isAirborne = false
+    /// Thump felt in the hand when the ball lands.
+    private let landingHaptic = UIImpactFeedbackGenerator(style: .medium)
     /// Dot pattern inside the ball; scrolling it with the velocity makes the
     /// ball read as rolling when seen from above.
     private let dotPattern = SKNode()
     private var lastUpdateTime: TimeInterval?
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 8
+    private static let buildNumber = 9
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -200,15 +203,21 @@ final class GameScene: SKScene {
         isAirborne = true
         let half = GameScene.hopDuration / 2
 
+        landingHaptic.prepare()
+
         let rise = SKAction.scale(to: 1.45, duration: half)
         rise.timingMode = .easeOut
         let fall = SKAction.scale(to: 1.0, duration: half)
         fall.timingMode = .easeIn
+        let land = SKAction.run { [weak self] in
+            self?.didLand()
+        }
         let squash = SKAction.sequence([
-            .scaleX(to: 1.12, y: 0.88, duration: 0.06),
-            .scaleX(to: 1.0, y: 1.0, duration: 0.09),
+            .scaleX(to: 1.22, y: 0.78, duration: 0.07),
+            .scaleX(to: 0.94, y: 1.06, duration: 0.08),
+            .scaleX(to: 1.0, y: 1.0, duration: 0.07),
         ])
-        ball.run(.sequence([rise, fall, squash])) { [weak self] in
+        ball.run(.sequence([rise, fall, land, squash])) { [weak self] in
             self?.isAirborne = false
         }
 
@@ -223,6 +232,51 @@ final class GameScene: SKScene {
         ])
         shadowIn.timingMode = .easeIn
         shadow.run(.sequence([shadowOut, shadowIn]))
+    }
+
+    /// Landing impact: haptic thump and a dust-ring shockwave rippling out
+    /// across the floor from the touchdown point.
+    private func didLand() {
+        landingHaptic.impactOccurred()
+
+        let ring = SKShapeNode(circleOfRadius: GameScene.ballRadius)
+        ring.position = ball.position
+        ring.zPosition = 4
+        ring.fillColor = .clear
+        ring.strokeColor = SKColor(white: 1, alpha: 0.55)
+        ring.lineWidth = 3
+        ring.setScale(0.6)
+        addChild(ring)
+
+        let expand = SKAction.scale(to: 2.1, duration: 0.35)
+        expand.timingMode = .easeOut
+        ring.run(.sequence([
+            .group([expand, .fadeOut(withDuration: 0.35)]),
+            .removeFromParent(),
+        ]))
+
+        // A few dust specks kicked out from under the ball.
+        for _ in 0..<8 {
+            let speck = SKShapeNode(circleOfRadius: CGFloat.random(in: 1.5...3))
+            speck.fillColor = SKColor(white: 0.85, alpha: 0.5)
+            speck.strokeColor = .clear
+            speck.position = ball.position
+            speck.zPosition = 4
+            addChild(speck)
+
+            let angle = CGFloat.random(in: 0..<(2 * .pi))
+            let distance = CGFloat.random(in: 28...55)
+            let drift = SKAction.moveBy(
+                x: cos(angle) * distance,
+                y: sin(angle) * distance,
+                duration: 0.3
+            )
+            drift.timingMode = .easeOut
+            speck.run(.sequence([
+                .group([drift, .fadeOut(withDuration: 0.3)]),
+                .removeFromParent(),
+            ]))
+        }
     }
 
     /// Seen from above, a rolling ball's top surface moves in the direction of
