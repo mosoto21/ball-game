@@ -11,6 +11,9 @@ final class GameScene: SKScene {
     /// True while the ball is in the air after a hop; tilt steering is
     /// suspended so the flight feels ballistic.
     private var isAirborne = false
+    /// When the last hop started; used to enforce a cooldown so the jolt of
+    /// the hand catching the phone can't chain into an accidental re-hop.
+    private var lastHopTime: TimeInterval = -.infinity
     /// Thump felt in the hand when the ball lands.
     private let landingHaptic = UIImpactFeedbackGenerator(style: .medium)
     /// Dot pattern inside the ball; scrolling it with the velocity makes the
@@ -19,7 +22,7 @@ final class GameScene: SKScene {
     private var lastUpdateTime: TimeInterval?
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 10
+    private static let buildNumber = 11
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -40,9 +43,12 @@ final class GameScene: SKScene {
     private static let deadZone: CGFloat = 0.02
     /// Upward jerk (in G, along the axis out of the screen) that triggers a
     /// hop — a quick upward pop of the phone, Kirby Tilt 'n' Tumble style.
-    private static let hopThreshold: Double = 0.75
+    private static let hopThreshold: Double = 0.9
     /// Time the ball spends in the air.
     private static let hopDuration: TimeInterval = 0.55
+    /// Quiet period after a hop starts before another may trigger, so the
+    /// catch-jolt at the end of the flick doesn't fire a second hop.
+    private static let hopCooldown: TimeInterval = 1.0
     /// Grid spacing of the dots on the ball's surface.
     private static let dotSpacing: CGFloat = 19
 
@@ -164,8 +170,10 @@ final class GameScene: SKScene {
         // A sharp upward pop of the phone (acceleration out of the screen,
         // beyond gravity) launches the ball into a hop.
         if !isAirborne,
+           currentTime - lastHopTime > GameScene.hopCooldown,
            let jerk = motion.deviceMotion?.userAcceleration.z,
            jerk > GameScene.hopThreshold {
+            lastHopTime = currentTime
             hop()
         }
 
