@@ -16,6 +16,10 @@ final class GameScene: SKScene {
     private var lastHopTime: TimeInterval = -.infinity
     /// Thump felt in the hand when the ball lands.
     private let landingHaptic = UIImpactFeedbackGenerator(style: .medium)
+    /// Follows the ball around the oversized world.
+    private let cameraNode = SKCameraNode()
+    /// The full playing field; larger than one screen.
+    private var worldRect: CGRect = .zero
     /// Deep thud when the ball drops into a hole.
     private let fallHaptic = UIImpactFeedbackGenerator(style: .heavy)
     /// Holes currently open on the floor.
@@ -28,7 +32,7 @@ final class GameScene: SKScene {
     private var lastUpdateTime: TimeInterval?
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 13
+    private static let buildNumber = 14
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -65,6 +69,12 @@ final class GameScene: SKScene {
     private static let dotSpacing: CGFloat = 19
 
     override func didMove(to view: SKView) {
+        // The playing field spans a 2×2 grid of screens; the camera follows
+        // the ball around it.
+        worldRect = CGRect(x: 0, y: 0, width: size.width * 2, height: size.height * 2)
+        camera = cameraNode
+        addChild(cameraNode)
+
         setUpBackground()
 
         // The ball is driven by forces from the tilt sensor each frame, not by
@@ -72,13 +82,14 @@ final class GameScene: SKScene {
         // gravity changes alone do not.
         physicsWorld.gravity = .zero
 
-        // Walls around the screen so the ball can't leave (until Milestone 3,
+        // Walls around the world so the ball can't leave (until Milestone 3,
         // where an open edge lets it roll onto the neighboring phone).
-        physicsBody = SKPhysicsBody(edgeLoopFrom: frame)
+        physicsBody = SKPhysicsBody(edgeLoopFrom: worldRect)
         physicsBody?.friction = 0.1
 
         setUpShadow()
         setUpBall()
+        setUpObstacles()
         setUpBuildLabel()
         startSpawningHoles()
 
@@ -91,7 +102,7 @@ final class GameScene: SKScene {
     private func setUpBall() {
         ball.fillColor = SKColor(red: 1.0, green: 0.45, blue: 0.25, alpha: 1)
         ball.strokeColor = .clear
-        ball.position = CGPoint(x: frame.midX, y: frame.midY)
+        ball.position = CGPoint(x: worldRect.midX, y: worldRect.midY)
 
         let body = SKPhysicsBody(circleOfRadius: GameScene.ballRadius)
         body.restitution = 0.55   // bounce off walls
@@ -110,7 +121,7 @@ final class GameScene: SKScene {
     /// a hop the ball grows while the shadow shrinks, selling the height.
     private func setUpShadow() {
         shadow.zPosition = 5
-        shadow.position = CGPoint(x: frame.midX, y: frame.midY)
+        shadow.position = CGPoint(x: worldRect.midX, y: worldRect.midY)
         addChild(shadow)
     }
 
@@ -144,19 +155,80 @@ final class GameScene: SKScene {
 
     // MARK: - Procedural textures (the "real world" look, drawn in code)
 
-    /// Warm wooden tabletop: planks with grain lines and a soft vignette.
+    /// Warm wooden tabletop covering the whole world: one screen-sized tile
+    /// (planks sized to line up at tile edges) repeated over the 2×2 field.
     private func setUpBackground() {
-        let background = SKSpriteNode(texture: GameScene.woodTexture(size: frame.size))
-        background.position = CGPoint(x: frame.midX, y: frame.midY)
-        background.zPosition = 0
-        addChild(background)
+        let tileSize = size
+        let texture = GameScene.woodTexture(size: tileSize)
+        for column in 0..<2 {
+            for row in 0..<2 {
+                let tile = SKSpriteNode(texture: texture)
+                tile.position = CGPoint(
+                    x: tileSize.width * (CGFloat(column) + 0.5),
+                    y: tileSize.height * (CGFloat(row) + 0.5)
+                )
+                tile.zPosition = 0
+                addChild(tile)
+            }
+        }
+    }
+
+    /// Wooden blocks scattered around the field for the ball to bounce off.
+    private func setUpObstacles() {
+        let safeRadius: CGFloat = 170 // keep the spawn point clear
+        let center = CGPoint(x: worldRect.midX, y: worldRect.midY)
+
+        for _ in 0..<14 {
+            let blockSize = CGSize(
+                width: CGFloat.random(in: 70...150),
+                height: CGFloat.random(in: 26...42)
+            )
+            var position = CGPoint.zero
+            var attempts = 0
+            repeat {
+                position = CGPoint(
+                    x: CGFloat.random(in: (worldRect.minX + 90)...(worldRect.maxX - 90)),
+                    y: CGFloat.random(in: (worldRect.minY + 90)...(worldRect.maxY - 90))
+                )
+                attempts += 1
+            } while hypot(position.x - center.x, position.y - center.y) < safeRadius
+                && attempts < 12
+
+            let block = SKShapeNode(rectOf: blockSize, cornerRadius: 7)
+            block.fillColor = SKColor(red: 0.42, green: 0.28, blue: 0.16, alpha: 1)
+            block.strokeColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 1)
+            block.lineWidth = 2
+            block.position = position
+            block.zRotation = CGFloat.random(in: 0..<(2 * .pi))
+            block.zPosition = 6
+
+            // Drop shadow so the block sits above the table like the ball.
+            let blockShadow = SKShapeNode(rectOf: blockSize, cornerRadius: 7)
+            blockShadow.fillColor = SKColor(white: 0, alpha: 0.28)
+            blockShadow.strokeColor = .clear
+            blockShadow.position = CGPoint(x: 4, y: -5)
+            blockShadow.zPosition = -1
+            block.addChild(blockShadow)
+
+            let body = SKPhysicsBody(rectangleOf: blockSize)
+            body.isDynamic = false
+            body.restitution = 0.5
+            body.friction = 0.2
+            block.physicsBody = body
+
+            addChild(block)
+        }
     }
 
     private static func woodTexture(size: CGSize) -> SKTexture {
-        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 2 // wood is soft-detail; halves texture memory
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
             let c = ctx.cgContext
 
-            let plankWidth: CGFloat = 92
+            // Divides evenly into the tile width so planks line up when the
+            // tile repeats across the world.
+            let plankWidth: CGFloat = size.width / 4
             var x: CGFloat = 0
             while x < size.width {
                 // Each plank gets its own slight tint.
@@ -331,8 +403,10 @@ final class GameScene: SKScene {
         label.fontName = "Menlo"
         label.fontSize = 12
         label.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.45)
-        label.position = CGPoint(x: frame.midX, y: frame.minY + 40)
-        addChild(label)
+        // HUD: pinned to the camera so it stays on screen while the world scrolls.
+        label.position = CGPoint(x: 0, y: -size.height / 2 + 40)
+        label.zPosition = 100
+        cameraNode.addChild(label)
     }
 
     override func update(_ currentTime: TimeInterval) {
@@ -408,6 +482,18 @@ final class GameScene: SKScene {
         }
 
         scrollSurfacePattern(velocity: body.velocity, dt: dt)
+        followBallWithCamera()
+    }
+
+    /// Keep the ball in view, clamping so the camera never shows past the
+    /// edge of the world.
+    private func followBallWithCamera() {
+        let halfWidth = size.width / 2
+        let halfHeight = size.height / 2
+        cameraNode.position = CGPoint(
+            x: min(max(ball.position.x, worldRect.minX + halfWidth), worldRect.maxX - halfWidth),
+            y: min(max(ball.position.y, worldRect.minY + halfHeight), worldRect.maxY - halfHeight)
+        )
     }
 
     /// Pop the ball into the air: it grows (closer to the viewer) while its
@@ -463,8 +549,8 @@ final class GameScene: SKScene {
         var position = CGPoint.zero
         for _ in 0..<12 {
             position = CGPoint(
-                x: CGFloat.random(in: (frame.minX + inset)...(frame.maxX - inset)),
-                y: CGFloat.random(in: (frame.minY + inset)...(frame.maxY - inset))
+                x: CGFloat.random(in: (worldRect.minX + inset)...(worldRect.maxX - inset)),
+                y: CGFloat.random(in: (worldRect.minY + inset)...(worldRect.maxY - inset))
             )
             if hypot(position.x - ball.position.x, position.y - ball.position.y) > 140 {
                 break
@@ -508,7 +594,7 @@ final class GameScene: SKScene {
 
         let respawn = SKAction.run { [weak self] in
             guard let self else { return }
-            self.ball.position = CGPoint(x: self.frame.midX, y: self.frame.midY)
+            self.ball.position = CGPoint(x: self.worldRect.midX, y: self.worldRect.midY)
             self.ball.setScale(0.3)
             self.ball.run(.group([
                 .scale(to: 1.0, duration: 0.25),
