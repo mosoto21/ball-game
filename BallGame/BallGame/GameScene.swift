@@ -134,7 +134,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 15
+    private static let buildNumber = 16
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -710,72 +710,97 @@ final class GameScene: SKScene {
 
     // MARK: - Procedural textures (the "real world" look, drawn in code)
 
+    /// Weathered outdoor duckboard (sunoko): horizontal sun-bleached slats
+    /// with dark gaps between them where the shade under the deck shows
+    /// through, fixed with nails at the ends.
     private static func woodTexture(size: CGSize) -> SKTexture {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 2 // wood is soft-detail; halves texture memory
         let image = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
             let c = ctx.cgContext
 
-            // Divides evenly into the tile width so planks line up when the
+            // Shade beneath the deck, visible through the gaps.
+            UIColor(red: 0.10, green: 0.08, blue: 0.06, alpha: 1).setFill()
+            c.fill(CGRect(origin: .zero, size: size))
+
+            // Divides evenly into the tile height so slats line up when the
             // tile repeats across the world.
-            let plankWidth: CGFloat = size.width / 4
-            var x: CGFloat = 0
-            while x < size.width {
-                // Each plank gets its own slight tint.
-                let shade = CGFloat.random(in: -0.045...0.045)
+            let slatHeight: CGFloat = size.height / 8
+            let gap: CGFloat = 6
+            var y: CGFloat = 0
+            while y < size.height {
+                let slatRect = CGRect(x: 0, y: y + gap / 2,
+                                      width: size.width, height: slatHeight - gap)
+
+                // Sun-bleached, slightly gray wood; each slat its own tint.
+                let shade = CGFloat.random(in: -0.05...0.05)
                 UIColor(
-                    red: 0.74 + shade,
-                    green: 0.56 + shade * 0.9,
-                    blue: 0.38 + shade * 0.8,
+                    red: 0.64 + shade,
+                    green: 0.55 + shade,
+                    blue: 0.42 + shade * 0.8,
                     alpha: 1
                 ).setFill()
-                c.fill(CGRect(x: x, y: 0, width: plankWidth, height: size.height))
+                c.fill(slatRect)
 
-                // Wavy grain lines running down the plank.
-                for _ in 0..<16 {
-                    let grainX = x + CGFloat.random(in: 6...(plankWidth - 6))
+                // Horizontal grain streaks along the slat.
+                for _ in 0..<12 {
+                    let grainY = slatRect.minY + CGFloat.random(in: 3...(slatRect.height - 3))
                     let path = UIBezierPath()
-                    path.move(to: CGPoint(x: grainX, y: -10))
-                    var y: CGFloat = -10
-                    var wobbleX = grainX
-                    while y < size.height + 10 {
-                        let nextY = y + CGFloat.random(in: 60...140)
-                        let nextX = min(max(wobbleX + CGFloat.random(in: -7...7), x + 3),
-                                        x + plankWidth - 3)
+                    path.move(to: CGPoint(x: -10, y: grainY))
+                    var gx: CGFloat = -10
+                    var wobbleY = grainY
+                    while gx < size.width + 10 {
+                        let nextX = gx + CGFloat.random(in: 70...160)
+                        let nextY = min(max(wobbleY + CGFloat.random(in: -4...4),
+                                            slatRect.minY + 2), slatRect.maxY - 2)
                         path.addQuadCurve(
                             to: CGPoint(x: nextX, y: nextY),
-                            controlPoint: CGPoint(x: wobbleX + CGFloat.random(in: -8...8),
-                                                  y: (y + nextY) / 2)
+                            controlPoint: CGPoint(x: (gx + nextX) / 2,
+                                                  y: wobbleY + CGFloat.random(in: -5...5))
                         )
-                        wobbleX = nextX
-                        y = nextY
+                        wobbleY = nextY
+                        gx = nextX
                     }
-                    UIColor(red: 0.45, green: 0.32, blue: 0.20,
-                            alpha: CGFloat.random(in: 0.05...0.14)).setStroke()
-                    path.lineWidth = CGFloat.random(in: 0.8...2.2)
+                    UIColor(red: 0.38, green: 0.31, blue: 0.22,
+                            alpha: CGFloat.random(in: 0.06...0.16)).setStroke()
+                    path.lineWidth = CGFloat.random(in: 0.7...2.0)
                     path.stroke()
                 }
 
-                // Seam between planks.
+                // Slat edges: lit top edge, shadowed bottom edge.
+                UIColor(white: 1, alpha: 0.13).setFill()
+                c.fill(CGRect(x: 0, y: slatRect.minY, width: size.width, height: 2))
                 UIColor(white: 0, alpha: 0.22).setFill()
-                c.fill(CGRect(x: x + plankWidth - 1.5, y: 0, width: 1.5, height: size.height))
-                x += plankWidth
+                c.fill(CGRect(x: 0, y: slatRect.maxY - 2, width: size.width, height: 2))
+
+                // Nail heads near both ends.
+                for nailX in [CGFloat(14), size.width - 14] {
+                    let nailY = slatRect.midY + CGFloat.random(in: -6...6)
+                    UIColor(red: 0.32, green: 0.30, blue: 0.28, alpha: 1).setFill()
+                    UIBezierPath(ovalIn: CGRect(x: nailX - 2.5, y: nailY - 2.5,
+                                                width: 5, height: 5)).fill()
+                    UIColor(white: 1, alpha: 0.35).setFill()
+                    UIBezierPath(ovalIn: CGRect(x: nailX - 1.5, y: nailY - 1.5,
+                                                width: 2, height: 2)).fill()
+                }
+
+                y += slatHeight
             }
 
-            // Vignette so the edges recede like a lit tabletop.
+            // Gentle outdoor light falloff — much lighter than indoors.
             if let vignette = CGGradient(
                 colorsSpace: CGColorSpaceCreateDeviceRGB(),
                 colors: [UIColor.clear.cgColor,
-                         UIColor(white: 0, alpha: 0.30).cgColor] as CFArray,
+                         UIColor(white: 0, alpha: 0.16).cgColor] as CFArray,
                 locations: [0, 1]
             ) {
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
                 c.drawRadialGradient(
                     vignette,
                     startCenter: center,
-                    startRadius: min(size.width, size.height) * 0.35,
+                    startRadius: min(size.width, size.height) * 0.4,
                     endCenter: center,
-                    endRadius: hypot(size.width, size.height) * 0.55,
+                    endRadius: hypot(size.width, size.height) * 0.6,
                     options: .drawsAfterEndLocation
                 )
             }
@@ -850,40 +875,111 @@ final class GameScene: SKScene {
         return SKTexture(image: image)
     }
 
-    /// A hole bored into the wood: deep dark center, warm walls near the
-    /// rim, and a faint lit inner wall opposite the light.
+    /// A hole smashed through the deck: a jagged opening with splintered
+    /// wood fibers poking into the darkness and hairline cracks running out
+    /// into the surrounding slats.
     private static func holeTexture(radius: CGFloat) -> SKTexture {
-        let diameter = radius * 2
-        let size = CGSize(width: diameter, height: diameter)
+        // Canvas is oversized so cracks and splinters can extend past the rim.
+        let canvas = radius * 2.7
+        let size = CGSize(width: canvas, height: canvas)
+        let center = CGPoint(x: canvas / 2, y: canvas / 2)
+
+        // Jagged rim: irregular radii around the circle.
+        var rimPoints: [CGPoint] = []
+        let segments = 15
+        for i in 0..<segments {
+            let angle = (CGFloat(i) / CGFloat(segments)) * 2 * .pi
+                + CGFloat.random(in: -0.1...0.1)
+            let r = radius * CGFloat.random(in: 0.74...1.02)
+            rimPoints.append(CGPoint(
+                x: center.x + cos(angle) * r,
+                y: center.y + sin(angle) * r
+            ))
+        }
+
         let image = UIGraphicsImageRenderer(size: size).image { ctx in
             let c = ctx.cgContext
-            c.addEllipse(in: CGRect(origin: .zero, size: size))
-            c.clip()
 
+            // Hairline cracks radiating outward from the break.
+            for _ in 0..<5 {
+                let angle = CGFloat.random(in: 0..<(2 * .pi))
+                let start = CGPoint(
+                    x: center.x + cos(angle) * radius * 0.9,
+                    y: center.y + sin(angle) * radius * 0.9
+                )
+                let end = CGPoint(
+                    x: center.x + cos(angle + CGFloat.random(in: -0.25...0.25)) * radius * CGFloat.random(in: 1.15...1.32),
+                    y: center.y + sin(angle + CGFloat.random(in: -0.25...0.25)) * radius * CGFloat.random(in: 1.15...1.32)
+                )
+                let crack = UIBezierPath()
+                crack.move(to: start)
+                crack.addQuadCurve(
+                    to: end,
+                    controlPoint: CGPoint(
+                        x: (start.x + end.x) / 2 + CGFloat.random(in: -6...6),
+                        y: (start.y + end.y) / 2 + CGFloat.random(in: -6...6)
+                    )
+                )
+                UIColor(red: 0.12, green: 0.09, blue: 0.06,
+                        alpha: CGFloat.random(in: 0.5...0.8)).setStroke()
+                crack.lineWidth = CGFloat.random(in: 1.0...2.2)
+                crack.stroke()
+            }
+
+            // The jagged opening itself.
+            let rim = UIBezierPath()
+            rim.move(to: rimPoints[0])
+            for point in rimPoints.dropFirst() { rim.addLine(to: point) }
+            rim.close()
+
+            c.saveGState()
+            rim.addClip()
             if let depth = CGGradient(
                 colorsSpace: CGColorSpaceCreateDeviceRGB(),
                 colors: [UIColor(red: 0.02, green: 0.015, blue: 0.01, alpha: 1).cgColor,
-                         UIColor(red: 0.18, green: 0.12, blue: 0.07, alpha: 1).cgColor] as CFArray,
+                         UIColor(red: 0.13, green: 0.09, blue: 0.06, alpha: 1).cgColor] as CFArray,
                 locations: [0, 1]
             ) {
-                let center = CGPoint(x: diameter / 2, y: diameter / 2)
                 c.drawRadialGradient(
                     depth,
-                    startCenter: center, startRadius: radius * 0.15,
+                    startCenter: center, startRadius: radius * 0.1,
                     endCenter: center, endRadius: radius,
-                    options: []
+                    options: .drawsAfterEndLocation
                 )
             }
 
-            // Inner wall catching a little light at the bottom edge.
-            let lit = UIBezierPath(
-                arcCenter: CGPoint(x: diameter / 2, y: diameter / 2),
-                radius: radius - 2.5,
-                startAngle: .pi * 0.15, endAngle: .pi * 0.85, clockwise: true
-            )
-            UIColor(red: 0.55, green: 0.4, blue: 0.25, alpha: 0.35).setStroke()
-            lit.lineWidth = 2.5
-            lit.stroke()
+            // Splintered fibers poking into the opening from the rim.
+            for i in 0..<10 {
+                let angle = (CGFloat(i) / 10) * 2 * .pi + CGFloat.random(in: -0.2...0.2)
+                let baseR = radius * CGFloat.random(in: 0.8...0.95)
+                let tipR = baseR - CGFloat.random(in: 10...20)
+                let spread = CGFloat.random(in: 0.06...0.12)
+                let splinter = UIBezierPath()
+                splinter.move(to: CGPoint(
+                    x: center.x + cos(angle - spread) * baseR,
+                    y: center.y + sin(angle - spread) * baseR
+                ))
+                splinter.addLine(to: CGPoint(
+                    x: center.x + cos(angle + spread) * baseR,
+                    y: center.y + sin(angle + spread) * baseR
+                ))
+                splinter.addLine(to: CGPoint(
+                    x: center.x + cos(angle) * tipR,
+                    y: center.y + sin(angle) * tipR
+                ))
+                splinter.close()
+                UIColor(red: 0.60 + CGFloat.random(in: -0.06...0.06),
+                        green: 0.50 + CGFloat.random(in: -0.05...0.05),
+                        blue: 0.36,
+                        alpha: 1).setFill()
+                splinter.fill()
+            }
+            c.restoreGState()
+
+            // Torn light edge where the wood snapped.
+            UIColor(red: 0.78, green: 0.68, blue: 0.52, alpha: 0.55).setStroke()
+            rim.lineWidth = 1.8
+            rim.stroke()
         }
         return SKTexture(image: image)
     }
