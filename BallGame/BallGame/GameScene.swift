@@ -134,7 +134,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 18
+    private static let buildNumber = 19
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -403,12 +403,28 @@ final class GameScene: SKScene {
         cameraNode.addChild(buildLabel)
     }
 
-    // MARK: - Ball
+    // MARK: - Ball & custom styles
+
+    /// The palette users pick the ball color from (must stay in sync with
+    /// the customizer UI's swatches).
+    static let ballColors: [UIColor] = [
+        UIColor(red: 1.00, green: 0.45, blue: 0.25, alpha: 1), // orange
+        UIColor(red: 0.86, green: 0.22, blue: 0.22, alpha: 1), // red
+        UIColor(red: 0.25, green: 0.50, blue: 0.95, alpha: 1), // blue
+        UIColor(red: 0.24, green: 0.70, blue: 0.40, alpha: 1), // green
+        UIColor(red: 0.62, green: 0.38, blue: 0.90, alpha: 1), // purple
+        UIColor(red: 0.95, green: 0.52, blue: 0.72, alpha: 1), // pink
+        UIColor(red: 0.20, green: 0.70, blue: 0.72, alpha: 1), // teal
+        UIColor(red: 0.95, green: 0.80, blue: 0.30, alpha: 1), // yellow
+    ]
+
+    enum BallPattern: Int, CaseIterable {
+        case dots = 0, stripes, checker, plain
+    }
 
     private func buildBallIfNeeded() {
         guard ball.physicsBody == nil else { return }
 
-        ball.fillColor = SKColor(red: 1.0, green: 0.45, blue: 0.25, alpha: 1)
         ball.strokeColor = .clear
 
         let body = SKPhysicsBody(circleOfRadius: GameScene.ballRadius)
@@ -418,37 +434,89 @@ final class GameScene: SKScene {
         body.allowsRotation = false // rolling is drawn via the surface pattern
         ball.physicsBody = body
 
-        ball.addChild(makeSurfacePattern())
-        ball.addChild(SKSpriteNode(texture: GameScene.ballGlossTexture(radius: GameScene.ballRadius)))
-        ball.zPosition = 10
-    }
-
-    /// Darker dots clipped to the ball's circle. Scrolled every frame to fake
-    /// the surface texture of a rolling sphere.
-    private func makeSurfacePattern() -> SKNode {
-        let spacing = GameScene.dotSpacing
-        var index = 0
-        for x in stride(from: -spacing * 3, through: spacing * 3, by: spacing) {
-            for y in stride(from: -spacing * 3, through: spacing * 3, by: spacing) {
-                let dot = SKShapeNode(circleOfRadius: 4.5)
-                dot.fillColor = SKColor(red: 0.75, green: 0.22, blue: 0.10, alpha: 1)
-                dot.strokeColor = .clear
-                // Offset every other row for a less grid-like look.
-                let stagger = (index % 2 == 0) ? spacing / 2 : 0
-                dot.position = CGPoint(x: x + stagger, y: y)
-                dotPattern.addChild(dot)
-                index += 1
-            }
-        }
-
         let mask = SKShapeNode(circleOfRadius: GameScene.ballRadius - 1)
         mask.fillColor = .white
         mask.strokeColor = .clear
-
         let crop = SKCropNode()
         crop.maskNode = mask
         crop.addChild(dotPattern)
-        return crop
+        ball.addChild(crop)
+
+        ball.addChild(SKSpriteNode(texture: GameScene.ballGlossTexture(radius: GameScene.ballRadius)))
+        ball.zPosition = 10
+
+        applyBallStyle()
+    }
+
+    /// Read the saved color/pattern choice and restyle the ball. Called at
+    /// launch and whenever the customizer changes a value.
+    func applyBallStyle() {
+        let colorIndex = UserDefaults.standard.integer(forKey: "ballColor")
+        let patternIndex = UserDefaults.standard.integer(forKey: "ballPattern")
+        let color = GameScene.ballColors[
+            min(max(colorIndex, 0), GameScene.ballColors.count - 1)
+        ]
+        let pattern = BallPattern(rawValue: patternIndex) ?? .dots
+
+        ball.fillColor = color
+        rebuildSurfacePattern(pattern, on: color)
+    }
+
+    /// A darker shade of the ball color for the surface pattern.
+    private static func patternColor(for color: UIColor) -> UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return UIColor(red: r * 0.62, green: g * 0.62, blue: b * 0.62, alpha: 1)
+    }
+
+    /// Fill the scrolling pattern container. Every pattern must repeat with
+    /// period `dotSpacing` on both axes, because the scroller wraps the
+    /// container position by that spacing.
+    private func rebuildSurfacePattern(_ pattern: BallPattern, on color: UIColor) {
+        dotPattern.removeAllChildren()
+        let spacing = GameScene.dotSpacing
+        let dark = GameScene.patternColor(for: color)
+
+        switch pattern {
+        case .dots:
+            var index = 0
+            for x in stride(from: -spacing * 3, through: spacing * 3, by: spacing) {
+                for y in stride(from: -spacing * 3, through: spacing * 3, by: spacing) {
+                    let dot = SKShapeNode(circleOfRadius: 4.5)
+                    dot.fillColor = dark
+                    dot.strokeColor = .clear
+                    // Offset every other row for a less grid-like look.
+                    let stagger = (index % 2 == 0) ? spacing / 2 : 0
+                    dot.position = CGPoint(x: x + stagger, y: y)
+                    dotPattern.addChild(dot)
+                    index += 1
+                }
+            }
+        case .stripes:
+            for y in stride(from: -spacing * 3, through: spacing * 3, by: spacing) {
+                let stripe = SKShapeNode(rectOf: CGSize(width: spacing * 7, height: spacing * 0.42))
+                stripe.fillColor = dark
+                stripe.strokeColor = .clear
+                stripe.position = CGPoint(x: 0, y: y)
+                dotPattern.addChild(stripe)
+            }
+        case .checker:
+            let square = spacing / 2
+            for x in stride(from: -spacing * 3, through: spacing * 3, by: spacing) {
+                for y in stride(from: -spacing * 3, through: spacing * 3, by: spacing) {
+                    for offset in [CGPoint(x: 0, y: 0),
+                                   CGPoint(x: square, y: square)] {
+                        let cell = SKShapeNode(rectOf: CGSize(width: square, height: square))
+                        cell.fillColor = dark
+                        cell.strokeColor = .clear
+                        cell.position = CGPoint(x: x + offset.x, y: y + offset.y)
+                        dotPattern.addChild(cell)
+                    }
+                }
+            }
+        case .plain:
+            break
+        }
     }
 
     // MARK: - Game loop
