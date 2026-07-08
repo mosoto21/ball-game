@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B3D97F7E2FFE5688004BD3B6 /* deck.png in Resources */ = {isa = PBXBuildFile; fileRef = B3D97F7D2FFE5688004BD3B6 /* deck.png */; };
 		BB0000000000000000000001 /* BallGameApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000001 /* BallGameApp.swift */; };
 		BB0000000000000000000002 /* GameScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000002 /* GameScene.swift */; };
 /* End PBXBuildFile section */
@@ -15,6 +16,7 @@
 		AA0000000000000000000001 /* BallGameApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BallGameApp.swift; sourceTree = "<group>"; };
 		AA0000000000000000000002 /* GameScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameScene.swift; sourceTree = "<group>"; };
 		AA0000000000000000000003 /* BallGame.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BallGame.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B3D97F7D2FFE5688004BD3B6 /* deck.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = deck.png; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -41,6 +43,7 @@
 			children = (
 				AA0000000000000000000001 /* BallGameApp.swift */,
 				AA0000000000000000000002 /* GameScene.swift */,
+				B3D97F7D2FFE5688004BD3B6 /* deck.png */,
 			);
 			path = BallGame;
 			sourceTree = "<group>";
@@ -111,6 +114,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B3D97F7E2FFE5688004BD3B6 /* deck.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
