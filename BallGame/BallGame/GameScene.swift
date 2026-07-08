@@ -2,37 +2,139 @@ import SpriteKit
 import CoreMotion
 import UIKit
 
-/// Milestone 1: a single ball on a single phone that rolls when you tilt the device.
+/// Adventure mode: hand-built courses on a wooden desk. Tilt to roll the
+/// ball from the start to the glowing goal hole, past everyday desk objects,
+/// without dropping into a trap hole. Flick the phone up to hop over traps.
 final class GameScene: SKScene {
+
+    // MARK: - Level definitions
+
+    /// A desk object sitting on the table that the ball bounces off.
+    struct Prop {
+        enum Kind { case pencil, eraser, domino, coin }
+        let kind: Kind
+        /// Position in normalized world coordinates (0...1 on each axis).
+        let position: CGPoint
+        let rotation: CGFloat
+    }
+
+    /// A hand-built course. Positions are normalized to the world size so
+    /// the same course plays on any screen size.
+    struct Level {
+        let screensWide: Int
+        let screensTall: Int
+        let start: CGPoint
+        let goal: CGPoint
+        let traps: [CGPoint]
+        let props: [Prop]
+    }
+
+    private static let levels: [Level] = [
+        // Level 1 — a gentle climb: learn to steer past a pencil and hop traps.
+        Level(
+            screensWide: 1, screensTall: 2,
+            start: CGPoint(x: 0.5, y: 0.10),
+            goal: CGPoint(x: 0.5, y: 0.92),
+            traps: [
+                CGPoint(x: 0.35, y: 0.42),
+                CGPoint(x: 0.68, y: 0.60),
+            ],
+            props: [
+                Prop(kind: .pencil, position: CGPoint(x: 0.5, y: 0.28), rotation: 0.35),
+                Prop(kind: .eraser, position: CGPoint(x: 0.22, y: 0.55), rotation: -0.4),
+                Prop(kind: .domino, position: CGPoint(x: 0.78, y: 0.74), rotation: 0.9),
+                Prop(kind: .coin, position: CGPoint(x: 0.28, y: 0.80), rotation: 0),
+            ]
+        ),
+        // Level 2 — pencil chicanes; the goal is tucked behind a coin bumper.
+        Level(
+            screensWide: 1, screensTall: 2,
+            start: CGPoint(x: 0.2, y: 0.08),
+            goal: CGPoint(x: 0.8, y: 0.93),
+            traps: [
+                CGPoint(x: 0.5, y: 0.28),
+                CGPoint(x: 0.25, y: 0.48),
+                CGPoint(x: 0.75, y: 0.55),
+                CGPoint(x: 0.5, y: 0.74),
+            ],
+            props: [
+                Prop(kind: .pencil, position: CGPoint(x: 0.38, y: 0.2), rotation: 1.15),
+                Prop(kind: .pencil, position: CGPoint(x: 0.68, y: 0.42), rotation: -0.85),
+                Prop(kind: .eraser, position: CGPoint(x: 0.18, y: 0.66), rotation: 0.3),
+                Prop(kind: .domino, position: CGPoint(x: 0.55, y: 0.6), rotation: 0.4),
+                Prop(kind: .coin, position: CGPoint(x: 0.82, y: 0.8), rotation: 0),
+                Prop(kind: .coin, position: CGPoint(x: 0.35, y: 0.86), rotation: 0),
+            ]
+        ),
+        // Level 3 — a wide open desk, diagonal trek with plenty of hazards.
+        Level(
+            screensWide: 2, screensTall: 2,
+            start: CGPoint(x: 0.08, y: 0.10),
+            goal: CGPoint(x: 0.92, y: 0.90),
+            traps: [
+                CGPoint(x: 0.3, y: 0.25),
+                CGPoint(x: 0.55, y: 0.4),
+                CGPoint(x: 0.2, y: 0.55),
+                CGPoint(x: 0.75, y: 0.6),
+                CGPoint(x: 0.45, y: 0.72),
+                CGPoint(x: 0.85, y: 0.78),
+            ],
+            props: [
+                Prop(kind: .pencil, position: CGPoint(x: 0.4, y: 0.15), rotation: -0.3),
+                Prop(kind: .pencil, position: CGPoint(x: 0.65, y: 0.5), rotation: 0.75),
+                Prop(kind: .pencil, position: CGPoint(x: 0.25, y: 0.7), rotation: 1.35),
+                Prop(kind: .eraser, position: CGPoint(x: 0.55, y: 0.28), rotation: 0.5),
+                Prop(kind: .eraser, position: CGPoint(x: 0.8, y: 0.35), rotation: -0.7),
+                Prop(kind: .domino, position: CGPoint(x: 0.15, y: 0.38), rotation: 0.2),
+                Prop(kind: .domino, position: CGPoint(x: 0.6, y: 0.85), rotation: -0.5),
+                Prop(kind: .coin, position: CGPoint(x: 0.35, y: 0.55), rotation: 0),
+                Prop(kind: .coin, position: CGPoint(x: 0.7, y: 0.72), rotation: 0),
+            ]
+        ),
+    ]
+
+    // MARK: - Nodes & state
 
     private let motion = CMMotionManager()
     private let ball = SKShapeNode(circleOfRadius: GameScene.ballRadius)
     private let shadow = SKSpriteNode(texture: GameScene.softShadowTexture(radius: GameScene.ballRadius))
-    /// True while the ball is in the air after a hop; tilt steering is
-    /// suspended so the flight feels ballistic.
-    private var isAirborne = false
-    /// When the last hop started; used to enforce a cooldown so the jolt of
-    /// the hand catching the phone can't chain into an accidental re-hop.
-    private var lastHopTime: TimeInterval = -.infinity
-    /// Thump felt in the hand when the ball lands.
-    private let landingHaptic = UIImpactFeedbackGenerator(style: .medium)
-    /// Follows the ball around the oversized world.
-    private let cameraNode = SKCameraNode()
-    /// The full playing field; larger than one screen.
-    private var worldRect: CGRect = .zero
-    /// Deep thud when the ball drops into a hole.
-    private let fallHaptic = UIImpactFeedbackGenerator(style: .heavy)
-    /// Holes currently open on the floor.
-    private var holes: [SKSpriteNode] = []
-    /// True while the ball is dropping into a hole / respawning.
-    private var isFalling = false
     /// Dot pattern inside the ball; scrolling it with the velocity makes the
     /// ball read as rolling when seen from above.
     private let dotPattern = SKNode()
+    /// Follows the ball around the oversized world.
+    private let cameraNode = SKCameraNode()
     private var lastUpdateTime: TimeInterval?
 
+    /// The full playing field; larger than one screen.
+    private var worldRect: CGRect = .zero
+    private var levelIndex = 0
+    private var startPosition = CGPoint.zero
+    private var goalPosition = CGPoint.zero
+    /// Trap holes currently on the floor.
+    private var holes: [SKSpriteNode] = []
+
+    /// True while the ball is in the air after a hop; tilt steering is
+    /// suspended so the flight feels ballistic.
+    private var isAirborne = false
+    /// True while the ball is dropping into a hole / respawning.
+    private var isFalling = false
+    /// True during the goal celebration and level switch.
+    private var isTransitioning = false
+    /// When the last hop started; used to enforce a cooldown so the jolt of
+    /// the hand catching the phone can't chain into an accidental re-hop.
+    private var lastHopTime: TimeInterval = -.infinity
+
+    /// Thump felt in the hand when the ball lands.
+    private let landingHaptic = UIImpactFeedbackGenerator(style: .medium)
+    /// Deep thud when the ball drops into a hole.
+    private let fallHaptic = UIImpactFeedbackGenerator(style: .heavy)
+    /// Fanfare buzz when a level is cleared.
+    private let goalHaptic = UINotificationFeedbackGenerator()
+
+    // MARK: - Tuning
+
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 14
+    private static let buildNumber = 15
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -61,48 +163,214 @@ final class GameScene: SKScene {
     private static let hopCooldown: TimeInterval = 1.0
     /// Radius of a hole in the floor.
     private static let holeRadius: CGFloat = 34
-    /// How long a hole stays fully open before closing again.
-    private static let holeLifetime: TimeInterval = 6.0
-    /// Average pause between hole spawns (varies ±3 s).
-    private static let holeSpawnInterval: TimeInterval = 5.0
     /// Grid spacing of the dots on the ball's surface.
     private static let dotSpacing: CGFloat = 19
 
+    // MARK: - Scene lifecycle
+
     override func didMove(to view: SKView) {
-        // The playing field spans a 2×2 grid of screens; the camera follows
-        // the ball around it.
-        worldRect = CGRect(x: 0, y: 0, width: size.width * 2, height: size.height * 2)
-        camera = cameraNode
-        addChild(cameraNode)
-
-        setUpBackground()
-
         // The ball is driven by forces from the tilt sensor each frame, not by
         // world gravity — force application also wakes a resting body, which
         // gravity changes alone do not.
         physicsWorld.gravity = .zero
 
-        // Walls around the world so the ball can't leave (until Milestone 3,
-        // where an open edge lets it roll onto the neighboring phone).
-        physicsBody = SKPhysicsBody(edgeLoopFrom: worldRect)
-        physicsBody?.friction = 0.1
-
-        setUpShadow()
-        setUpBall()
-        setUpObstacles()
-        setUpBuildLabel()
-        startSpawningHoles()
-
         // Device motion separates gravity from shakes, giving smooth tilt data.
         motion.deviceMotionUpdateInterval = 1.0 / 60.0
         motion.startDeviceMotionUpdates()
         motion.startAccelerometerUpdates() // fallback source
+
+        buildBallIfNeeded()
+        loadLevel(levelIndex)
     }
 
-    private func setUpBall() {
+    /// Tear down the old course and build the new one. The ball, shadow and
+    /// camera are re-added each time; everything else is created fresh.
+    private func loadLevel(_ index: Int) {
+        removeAllActions()
+        removeAllChildren()
+        cameraNode.removeAllChildren()
+        holes.removeAll()
+        isAirborne = false
+        isFalling = false
+        isTransitioning = false
+        lastUpdateTime = nil
+
+        let level = GameScene.levels[index]
+        worldRect = CGRect(
+            x: 0, y: 0,
+            width: size.width * CGFloat(level.screensWide),
+            height: size.height * CGFloat(level.screensTall)
+        )
+        startPosition = denormalize(level.start)
+        goalPosition = denormalize(level.goal)
+
+        camera = cameraNode
+        addChild(cameraNode)
+
+        setUpBackground(level: level)
+
+        physicsBody = SKPhysicsBody(edgeLoopFrom: worldRect)
+        physicsBody?.friction = 0.1
+
+        for trap in level.traps {
+            addTrap(at: denormalize(trap))
+        }
+        addGoal(at: goalPosition)
+        for prop in level.props {
+            addProp(prop)
+        }
+
+        // Ball and shadow return at the level's start.
+        ball.removeAllActions()
+        ball.setScale(1)
+        ball.alpha = 1
+        ball.position = startPosition
+        ball.physicsBody?.velocity = .zero
+        addChild(ball)
+
+        shadow.removeAllActions()
+        shadow.setScale(1)
+        shadow.alpha = 1
+        shadow.zPosition = 5
+        shadow.position = startPosition
+        addChild(shadow)
+
+        setUpHUD(levelNumber: index + 1)
+        followBallWithCamera()
+    }
+
+    private func denormalize(_ point: CGPoint) -> CGPoint {
+        CGPoint(
+            x: worldRect.minX + point.x * worldRect.width,
+            y: worldRect.minY + point.y * worldRect.height
+        )
+    }
+
+    // MARK: - Course construction
+
+    /// Warm wooden tabletop covering the whole world: one screen-sized tile
+    /// (planks sized to line up at tile edges) repeated over the field.
+    private func setUpBackground(level: Level) {
+        let tileSize = size
+        let texture = GameScene.woodTexture(size: tileSize)
+        for column in 0..<level.screensWide {
+            for row in 0..<level.screensTall {
+                let tile = SKSpriteNode(texture: texture)
+                tile.position = CGPoint(
+                    x: tileSize.width * (CGFloat(column) + 0.5),
+                    y: tileSize.height * (CGFloat(row) + 0.5)
+                )
+                tile.zPosition = 0
+                addChild(tile)
+            }
+        }
+    }
+
+    private func addTrap(at position: CGPoint) {
+        let hole = SKSpriteNode(texture: GameScene.holeTexture(radius: GameScene.holeRadius))
+        hole.position = position
+        hole.zPosition = 2
+        addChild(hole)
+        holes.append(hole)
+    }
+
+    /// The goal: a hole ringed with pulsing golden light.
+    private func addGoal(at position: CGPoint) {
+        let hole = SKSpriteNode(texture: GameScene.holeTexture(radius: GameScene.holeRadius))
+        hole.position = position
+        hole.zPosition = 2
+        addChild(hole)
+
+        let glow = SKShapeNode(circleOfRadius: GameScene.holeRadius + 5)
+        glow.fillColor = .clear
+        glow.strokeColor = SKColor(red: 1.0, green: 0.82, blue: 0.35, alpha: 0.9)
+        glow.lineWidth = 4
+        glow.glowWidth = 6
+        glow.position = position
+        glow.zPosition = 3
+        addChild(glow)
+
+        let pulse = SKAction.sequence([
+            .group([.scale(to: 1.12, duration: 0.7), .fadeAlpha(to: 0.55, duration: 0.7)]),
+            .group([.scale(to: 1.0, duration: 0.7), .fadeAlpha(to: 0.9, duration: 0.7)]),
+        ])
+        pulse.timingMode = .easeInEaseOut
+        glow.run(.repeatForever(pulse))
+    }
+
+    /// Place a desk object with its texture, silhouette shadow, and a static
+    /// physics body so the ball bounces off it.
+    private func addProp(_ prop: Prop) {
+        let texture: SKTexture
+        let body: SKPhysicsBody
+        var restitution: CGFloat = 0.4
+
+        switch prop.kind {
+        case .pencil:
+            texture = GameScene.pencilTexture()
+            body = SKPhysicsBody(rectangleOf: texture.size())
+            restitution = 0.45
+        case .eraser:
+            texture = GameScene.eraserTexture()
+            body = SKPhysicsBody(rectangleOf: texture.size())
+            restitution = 0.8 // rubber: bounciest wall on the desk
+        case .domino:
+            texture = GameScene.dominoTexture()
+            body = SKPhysicsBody(rectangleOf: texture.size())
+            restitution = 0.4
+        case .coin:
+            texture = GameScene.coinTexture()
+            body = SKPhysicsBody(circleOfRadius: texture.size().width / 2)
+            restitution = 0.85 // round bumper
+        }
+
+        let node = SKSpriteNode(texture: texture)
+        node.position = denormalize(prop.position)
+        node.zRotation = prop.rotation
+        node.zPosition = 6
+
+        // Silhouette drop shadow so the object sits above the table.
+        let propShadow = SKSpriteNode(texture: texture)
+        propShadow.color = .black
+        propShadow.colorBlendFactor = 1
+        propShadow.alpha = 0.25
+        propShadow.position = CGPoint(x: 4, y: -5)
+        propShadow.zPosition = -1
+        node.addChild(propShadow)
+
+        body.isDynamic = false
+        body.restitution = restitution
+        body.friction = 0.2
+        node.physicsBody = body
+
+        addChild(node)
+    }
+
+    private func setUpHUD(levelNumber: Int) {
+        let levelLabel = SKLabelNode(text: "LEVEL \(levelNumber)")
+        levelLabel.fontName = "AvenirNext-Bold"
+        levelLabel.fontSize = 20
+        levelLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.7)
+        levelLabel.position = CGPoint(x: 0, y: size.height / 2 - 70)
+        levelLabel.zPosition = 100
+        cameraNode.addChild(levelLabel)
+
+        let buildLabel = SKLabelNode(text: "build \(GameScene.buildNumber)")
+        buildLabel.fontName = "Menlo"
+        buildLabel.fontSize = 12
+        buildLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.45)
+        buildLabel.position = CGPoint(x: 0, y: -size.height / 2 + 40)
+        buildLabel.zPosition = 100
+        cameraNode.addChild(buildLabel)
+    }
+
+    // MARK: - Ball
+
+    private func buildBallIfNeeded() {
+        guard ball.physicsBody == nil else { return }
+
         ball.fillColor = SKColor(red: 1.0, green: 0.45, blue: 0.25, alpha: 1)
         ball.strokeColor = .clear
-        ball.position = CGPoint(x: worldRect.midX, y: worldRect.midY)
 
         let body = SKPhysicsBody(circleOfRadius: GameScene.ballRadius)
         body.restitution = 0.55   // bounce off walls
@@ -114,15 +382,6 @@ final class GameScene: SKScene {
         ball.addChild(makeSurfacePattern())
         ball.addChild(SKSpriteNode(texture: GameScene.ballGlossTexture(radius: GameScene.ballRadius)))
         ball.zPosition = 10
-        addChild(ball)
-    }
-
-    /// Soft drop shadow on the "floor". It tracks the ball's position; during
-    /// a hop the ball grows while the shadow shrinks, selling the height.
-    private func setUpShadow() {
-        shadow.zPosition = 5
-        shadow.position = CGPoint(x: worldRect.midX, y: worldRect.midY)
-        addChild(shadow)
     }
 
     /// Darker dots clipped to the ball's circle. Scrolled every frame to fake
@@ -153,72 +412,303 @@ final class GameScene: SKScene {
         return crop
     }
 
-    // MARK: - Procedural textures (the "real world" look, drawn in code)
+    // MARK: - Game loop
 
-    /// Warm wooden tabletop covering the whole world: one screen-sized tile
-    /// (planks sized to line up at tile edges) repeated over the 2×2 field.
-    private func setUpBackground() {
-        let tileSize = size
-        let texture = GameScene.woodTexture(size: tileSize)
-        for column in 0..<2 {
-            for row in 0..<2 {
-                let tile = SKSpriteNode(texture: texture)
-                tile.position = CGPoint(
-                    x: tileSize.width * (CGFloat(column) + 0.5),
-                    y: tileSize.height * (CGFloat(row) + 0.5)
-                )
-                tile.zPosition = 0
-                addChild(tile)
+    override func update(_ currentTime: TimeInterval) {
+        let dt = min(currentTime - (lastUpdateTime ?? currentTime), 1.0 / 30.0)
+        lastUpdateTime = currentTime
+
+        guard let body = ball.physicsBody else { return }
+
+        // A sharp upward pop of the phone (acceleration out of the screen,
+        // beyond gravity) launches the ball into a hop.
+        if !isAirborne, !isFalling, !isTransitioning,
+           currentTime - lastHopTime > GameScene.hopCooldown,
+           let jerk = motion.deviceMotion?.userAcceleration.z,
+           jerk > GameScene.hopThreshold {
+            lastHopTime = currentTime
+            hop()
+        }
+
+        shadow.position = CGPoint(x: ball.position.x, y: ball.position.y - 4)
+
+        if !isAirborne, !isFalling, !isTransitioning {
+            // Reaching the goal wins the level.
+            let goalDistance = hypot(
+                ball.position.x - goalPosition.x,
+                ball.position.y - goalPosition.y
+            )
+            if goalDistance < GameScene.holeRadius * 0.8 {
+                reachGoal()
+            } else {
+                // A grounded ball rolling over a trap falls in; a hopping
+                // ball sails right over.
+                for hole in holes {
+                    let distance = hypot(
+                        ball.position.x - hole.position.x,
+                        ball.position.y - hole.position.y
+                    )
+                    if distance < GameScene.holeRadius * 0.8 {
+                        fall(into: hole)
+                        break
+                    }
+                }
             }
         }
+
+        // While airborne the ball keeps its launch velocity — you can't
+        // steer a ball that isn't touching the ground.
+        if !isAirborne, !isFalling, !isTransitioning, var tilt = currentTilt() {
+            if abs(tilt.dx) < GameScene.deadZone { tilt.dx = 0 }
+            if abs(tilt.dy) < GameScene.deadZone { tilt.dy = 0 }
+
+            // In portrait, the device's x/y axes line up with the screen's
+            // x/y axes, so the tilt maps directly to a screen-space target
+            // velocity that the ball converges on.
+            var target = CGVector(
+                dx: tilt.dx * GameScene.speedPerTilt,
+                dy: tilt.dy * GameScene.speedPerTilt
+            )
+            let speed = hypot(target.dx, target.dy)
+            if speed > GameScene.maxSpeed {
+                target.dx *= GameScene.maxSpeed / speed
+                target.dy *= GameScene.maxSpeed / speed
+            }
+
+            let blend = min(1, GameScene.responsiveness * dt)
+            var deltaX = (target.dx - body.velocity.dx) * blend
+            var deltaY = (target.dy - body.velocity.dy) * blend
+
+            // Cap the per-frame speed change so reversing direction ramps up
+            // like starting from rest instead of whipping around at double
+            // the usual acceleration.
+            let maxDelta = GameScene.maxAcceleration * dt
+            let delta = hypot(deltaX, deltaY)
+            if delta > maxDelta, delta > 0 {
+                deltaX *= maxDelta / delta
+                deltaY *= maxDelta / delta
+            }
+
+            body.velocity = CGVector(
+                dx: body.velocity.dx + deltaX,
+                dy: body.velocity.dy + deltaY
+            )
+        }
+
+        scrollSurfacePattern(velocity: body.velocity, dt: dt)
+        followBallWithCamera()
     }
 
-    /// Wooden blocks scattered around the field for the ball to bounce off.
-    private func setUpObstacles() {
-        let safeRadius: CGFloat = 170 // keep the spawn point clear
-        let center = CGPoint(x: worldRect.midX, y: worldRect.midY)
+    /// Keep the ball in view, clamping so the camera never shows past the
+    /// edge of the world.
+    private func followBallWithCamera() {
+        let halfWidth = size.width / 2
+        let halfHeight = size.height / 2
+        cameraNode.position = CGPoint(
+            x: min(max(ball.position.x, worldRect.minX + halfWidth), worldRect.maxX - halfWidth),
+            y: min(max(ball.position.y, worldRect.minY + halfHeight), worldRect.maxY - halfHeight)
+        )
+    }
 
-        for _ in 0..<14 {
-            let blockSize = CGSize(
-                width: CGFloat.random(in: 70...150),
-                height: CGFloat.random(in: 26...42)
+    /// Seen from above, a rolling ball's top surface moves in the direction of
+    /// travel — scroll the dots with the velocity and wrap them so the pattern
+    /// never runs out.
+    private func scrollSurfacePattern(velocity: CGVector, dt: CGFloat) {
+        let spacing = GameScene.dotSpacing
+        var position = dotPattern.position
+        position.x += velocity.dx * dt * 0.8
+        position.y += velocity.dy * dt * 0.8
+        position.x = position.x.truncatingRemainder(dividingBy: spacing)
+        position.y = position.y.truncatingRemainder(dividingBy: spacing)
+        dotPattern.position = position
+    }
+
+    /// The direction gravity pulls, in the device's frame, in G units.
+    /// Prefers device motion (filtered, smooth); falls back to the raw
+    /// accelerometer if device motion isn't available yet.
+    private func currentTilt() -> CGVector? {
+        if let gravity = motion.deviceMotion?.gravity {
+            return CGVector(dx: gravity.x, dy: gravity.y)
+        }
+        if let acceleration = motion.accelerometerData?.acceleration {
+            return CGVector(dx: acceleration.x, dy: acceleration.y)
+        }
+        return nil
+    }
+
+    // MARK: - Hop
+
+    /// Pop the ball into the air: it grows (closer to the viewer) while its
+    /// shadow shrinks, then lands with a small squash.
+    private func hop() {
+        isAirborne = true
+        let half = GameScene.hopDuration / 2
+
+        landingHaptic.prepare()
+
+        let rise = SKAction.scale(to: 1.45, duration: half)
+        rise.timingMode = .easeOut
+        let fall = SKAction.scale(to: 1.0, duration: half)
+        fall.timingMode = .easeIn
+        let land = SKAction.run { [weak self] in
+            self?.didLand()
+        }
+        let squash = SKAction.sequence([
+            .scaleX(to: 1.22, y: 0.78, duration: 0.07),
+            .scaleX(to: 0.94, y: 1.06, duration: 0.08),
+            .scaleX(to: 1.0, y: 1.0, duration: 0.07),
+        ])
+        // Steering returns at touchdown (in didLand); the squash afterwards
+        // is purely cosmetic.
+        ball.run(.sequence([rise, fall, land, squash]))
+
+        let shadowOut = SKAction.group([
+            .scale(to: 0.55, duration: half),
+            .fadeAlpha(to: 0.15, duration: half),
+        ])
+        shadowOut.timingMode = .easeOut
+        let shadowIn = SKAction.group([
+            .scale(to: 1.0, duration: half),
+            .fadeAlpha(to: 1.0, duration: half),
+        ])
+        shadowIn.timingMode = .easeIn
+        shadow.run(.sequence([shadowOut, shadowIn]))
+    }
+
+    /// Landing impact: haptic thump and a dust-ring shockwave rippling out
+    /// across the floor from the touchdown point.
+    private func didLand() {
+        isAirborne = false
+        landingHaptic.impactOccurred()
+
+        let ring = SKShapeNode(circleOfRadius: GameScene.ballRadius)
+        ring.position = ball.position
+        ring.zPosition = 4
+        ring.fillColor = .clear
+        ring.strokeColor = SKColor(red: 0.93, green: 0.86, blue: 0.72, alpha: 0.65)
+        ring.lineWidth = 3
+        ring.setScale(0.6)
+        addChild(ring)
+
+        let expand = SKAction.scale(to: 2.1, duration: 0.35)
+        expand.timingMode = .easeOut
+        ring.run(.sequence([
+            .group([expand, .fadeOut(withDuration: 0.35)]),
+            .removeFromParent(),
+        ]))
+
+        // A few dust specks kicked out from under the ball.
+        for _ in 0..<8 {
+            let speck = SKShapeNode(circleOfRadius: CGFloat.random(in: 1.5...3))
+            speck.fillColor = SKColor(red: 0.93, green: 0.86, blue: 0.72, alpha: 0.55)
+            speck.strokeColor = .clear
+            speck.position = ball.position
+            speck.zPosition = 4
+            addChild(speck)
+
+            let angle = CGFloat.random(in: 0..<(2 * .pi))
+            let distance = CGFloat.random(in: 28...55)
+            let drift = SKAction.moveBy(
+                x: cos(angle) * distance,
+                y: sin(angle) * distance,
+                duration: 0.3
             )
-            var position = CGPoint.zero
-            var attempts = 0
-            repeat {
-                position = CGPoint(
-                    x: CGFloat.random(in: (worldRect.minX + 90)...(worldRect.maxX - 90)),
-                    y: CGFloat.random(in: (worldRect.minY + 90)...(worldRect.maxY - 90))
-                )
-                attempts += 1
-            } while hypot(position.x - center.x, position.y - center.y) < safeRadius
-                && attempts < 12
-
-            let block = SKShapeNode(rectOf: blockSize, cornerRadius: 7)
-            block.fillColor = SKColor(red: 0.42, green: 0.28, blue: 0.16, alpha: 1)
-            block.strokeColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 1)
-            block.lineWidth = 2
-            block.position = position
-            block.zRotation = CGFloat.random(in: 0..<(2 * .pi))
-            block.zPosition = 6
-
-            // Drop shadow so the block sits above the table like the ball.
-            let blockShadow = SKShapeNode(rectOf: blockSize, cornerRadius: 7)
-            blockShadow.fillColor = SKColor(white: 0, alpha: 0.28)
-            blockShadow.strokeColor = .clear
-            blockShadow.position = CGPoint(x: 4, y: -5)
-            blockShadow.zPosition = -1
-            block.addChild(blockShadow)
-
-            let body = SKPhysicsBody(rectangleOf: blockSize)
-            body.isDynamic = false
-            body.restitution = 0.5
-            body.friction = 0.2
-            block.physicsBody = body
-
-            addChild(block)
+            drift.timingMode = .easeOut
+            speck.run(.sequence([
+                .group([drift, .fadeOut(withDuration: 0.3)]),
+                .removeFromParent(),
+            ]))
         }
     }
+
+    // MARK: - Falling & winning
+
+    /// The ball rolled over a trap: suck it in, then restart the level.
+    private func fall(into hole: SKSpriteNode) {
+        isFalling = true
+        fallHaptic.impactOccurred()
+        ball.physicsBody?.velocity = .zero
+
+        let suck = SKAction.group([
+            .move(to: hole.position, duration: 0.12),
+            .scale(to: 0.08, duration: 0.3),
+            .fadeOut(withDuration: 0.3),
+        ])
+        suck.timingMode = .easeIn
+
+        let respawn = SKAction.run { [weak self] in
+            guard let self else { return }
+            self.ball.position = self.startPosition
+            self.ball.setScale(0.3)
+            self.ball.run(.group([
+                .scale(to: 1.0, duration: 0.25),
+                .fadeIn(withDuration: 0.2),
+            ])) { self.isFalling = false }
+            self.shadow.run(.fadeIn(withDuration: 0.2))
+        }
+
+        shadow.run(.fadeOut(withDuration: 0.2))
+        ball.run(.sequence([suck, .wait(forDuration: 0.6), respawn]))
+    }
+
+    /// The ball reached the goal: celebrate, then move to the next level.
+    private func reachGoal() {
+        isTransitioning = true
+        goalHaptic.notificationOccurred(.success)
+        ball.physicsBody?.velocity = .zero
+
+        let suck = SKAction.group([
+            .move(to: goalPosition, duration: 0.12),
+            .scale(to: 0.08, duration: 0.3),
+            .fadeOut(withDuration: 0.3),
+        ])
+        suck.timingMode = .easeIn
+        ball.run(suck)
+        shadow.run(.fadeOut(withDuration: 0.2))
+
+        // Golden burst from the goal.
+        for _ in 0..<3 {
+            let ring = SKShapeNode(circleOfRadius: GameScene.holeRadius)
+            ring.position = goalPosition
+            ring.zPosition = 8
+            ring.fillColor = .clear
+            ring.strokeColor = SKColor(red: 1.0, green: 0.82, blue: 0.35, alpha: 0.85)
+            ring.lineWidth = 3
+            ring.setScale(0.5)
+            addChild(ring)
+            let expand = SKAction.scale(to: CGFloat.random(in: 2.2...3.2),
+                                        duration: TimeInterval.random(in: 0.5...0.8))
+            expand.timingMode = .easeOut
+            ring.run(.sequence([
+                .group([expand, .fadeOut(withDuration: 0.7)]),
+                .removeFromParent(),
+            ]))
+        }
+
+        let isLastLevel = levelIndex == GameScene.levels.count - 1
+        let banner = SKLabelNode(text: isLastLevel ? "ALL CLEAR!" : "LEVEL \(levelIndex + 1) CLEAR!")
+        banner.fontName = "AvenirNext-Bold"
+        banner.fontSize = 34
+        banner.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 1)
+        banner.position = .zero
+        banner.zPosition = 100
+        banner.setScale(0.1)
+        cameraNode.addChild(banner)
+        let popIn = SKAction.scale(to: 1.0, duration: 0.3)
+        popIn.timingMode = .easeOut
+        banner.run(popIn)
+
+        run(.sequence([
+            .wait(forDuration: 1.8),
+            .run { [weak self] in
+                guard let self else { return }
+                self.levelIndex = (self.levelIndex + 1) % GameScene.levels.count
+                self.loadLevel(self.levelIndex)
+            },
+        ]))
+    }
+
+    // MARK: - Procedural textures (the "real world" look, drawn in code)
 
     private static func woodTexture(size: CGSize) -> SKTexture {
         let format = UIGraphicsImageRendererFormat()
@@ -398,284 +888,153 @@ final class GameScene: SKScene {
         return SKTexture(image: image)
     }
 
-    private func setUpBuildLabel() {
-        let label = SKLabelNode(text: "build \(GameScene.buildNumber)")
-        label.fontName = "Menlo"
-        label.fontSize = 12
-        label.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.45)
-        // HUD: pinned to the camera so it stays on screen while the world scrolls.
-        label.position = CGPoint(x: 0, y: -size.height / 2 + 40)
-        label.zPosition = 100
-        cameraNode.addChild(label)
+    /// A yellow pencil seen from above: painted body, sharpened wooden tip
+    /// with graphite, and a pink eraser behind a metal ferrule.
+    private static func pencilTexture() -> SKTexture {
+        let size = CGSize(width: 190, height: 16)
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            let c = ctx.cgContext
+
+            // Painted body.
+            let bodyRect = CGRect(x: 26, y: 0, width: 138, height: 16)
+            UIColor(red: 0.93, green: 0.72, blue: 0.18, alpha: 1).setFill()
+            c.fill(bodyRect)
+            // Facet shading lines along the body.
+            UIColor(red: 0.78, green: 0.58, blue: 0.10, alpha: 1).setFill()
+            c.fill(CGRect(x: 26, y: 0, width: 138, height: 3.5))
+            UIColor(red: 1.0, green: 0.83, blue: 0.38, alpha: 1).setFill()
+            c.fill(CGRect(x: 26, y: 5.5, width: 138, height: 3))
+
+            // Sharpened wooden tip.
+            let wood = UIBezierPath()
+            wood.move(to: CGPoint(x: 26, y: 0))
+            wood.addLine(to: CGPoint(x: 26, y: 16))
+            wood.addLine(to: CGPoint(x: 6, y: 8))
+            wood.close()
+            UIColor(red: 0.87, green: 0.72, blue: 0.52, alpha: 1).setFill()
+            wood.fill()
+            // Graphite point.
+            let graphite = UIBezierPath()
+            graphite.move(to: CGPoint(x: 9, y: 6.5))
+            graphite.addLine(to: CGPoint(x: 9, y: 9.5))
+            graphite.addLine(to: CGPoint(x: 0, y: 8))
+            graphite.close()
+            UIColor(red: 0.25, green: 0.25, blue: 0.28, alpha: 1).setFill()
+            graphite.fill()
+
+            // Metal ferrule.
+            UIColor(red: 0.75, green: 0.76, blue: 0.80, alpha: 1).setFill()
+            c.fill(CGRect(x: 164, y: 0, width: 12, height: 16))
+            UIColor(red: 0.55, green: 0.56, blue: 0.62, alpha: 1).setFill()
+            c.fill(CGRect(x: 167, y: 0, width: 2, height: 16))
+            c.fill(CGRect(x: 171, y: 0, width: 2, height: 16))
+
+            // Pink eraser.
+            let eraserRect = CGRect(x: 176, y: 0, width: 14, height: 16)
+            UIColor(red: 0.94, green: 0.6, blue: 0.62, alpha: 1).setFill()
+            UIBezierPath(roundedRect: eraserRect,
+                         byRoundingCorners: [.topRight, .bottomRight],
+                         cornerRadii: CGSize(width: 7, height: 7)).fill()
+        }
+        return SKTexture(image: image)
     }
 
-    override func update(_ currentTime: TimeInterval) {
-        let dt = min(currentTime - (lastUpdateTime ?? currentTime), 1.0 / 30.0)
-        lastUpdateTime = currentTime
+    /// A white eraser in a blue paper sleeve.
+    private static func eraserTexture() -> SKTexture {
+        let size = CGSize(width: 76, height: 38)
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            let c = ctx.cgContext
 
-        guard let body = ball.physicsBody else { return }
+            let body = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size),
+                                    cornerRadius: 6)
+            UIColor(red: 0.96, green: 0.96, blue: 0.94, alpha: 1).setFill()
+            body.fill()
+            // Subtle bottom shading for thickness.
+            UIColor(red: 0.8, green: 0.8, blue: 0.78, alpha: 1).setFill()
+            c.fill(CGRect(x: 3, y: 30, width: 70, height: 5))
 
-        // A sharp upward pop of the phone (acceleration out of the screen,
-        // beyond gravity) launches the ball into a hop.
-        if !isAirborne, !isFalling,
-           currentTime - lastHopTime > GameScene.hopCooldown,
-           let jerk = motion.deviceMotion?.userAcceleration.z,
-           jerk > GameScene.hopThreshold {
-            lastHopTime = currentTime
-            hop()
+            // Paper sleeve.
+            UIColor(red: 0.20, green: 0.32, blue: 0.62, alpha: 1).setFill()
+            c.fill(CGRect(x: 20, y: 0, width: 36, height: 38))
+            UIColor(white: 1, alpha: 0.85).setFill()
+            c.fill(CGRect(x: 24, y: 15, width: 28, height: 3))
+            c.fill(CGRect(x: 28, y: 22, width: 20, height: 2))
         }
+        return SKTexture(image: image)
+    }
 
-        shadow.position = CGPoint(x: ball.position.x, y: ball.position.y - 4)
+    /// A domino tile lying flat: ivory face, dividing line, 3|5 pips.
+    private static func dominoTexture() -> SKTexture {
+        let size = CGSize(width: 66, height: 34)
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            let c = ctx.cgContext
 
-        // A grounded ball rolling over an open hole falls in; a hopping ball
-        // sails right over it.
-        if !isAirborne, !isFalling {
-            for hole in holes where hole.xScale > 0.9 {
-                let distance = hypot(
-                    ball.position.x - hole.position.x,
-                    ball.position.y - hole.position.y
+            let body = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size),
+                                    cornerRadius: 5)
+            UIColor(red: 0.97, green: 0.95, blue: 0.90, alpha: 1).setFill()
+            body.fill()
+            UIColor(red: 0.75, green: 0.72, blue: 0.66, alpha: 1).setStroke()
+            body.lineWidth = 1.5
+            body.stroke()
+
+            // Divider.
+            UIColor(red: 0.55, green: 0.52, blue: 0.48, alpha: 1).setFill()
+            c.fill(CGRect(x: 32, y: 4, width: 2, height: 26))
+
+            func pip(_ x: CGFloat, _ y: CGFloat) {
+                UIColor(red: 0.15, green: 0.17, blue: 0.3, alpha: 1).setFill()
+                UIBezierPath(ovalIn: CGRect(x: x - 2.8, y: y - 2.8,
+                                            width: 5.6, height: 5.6)).fill()
+            }
+            // Left: 3 pips.
+            pip(9, 8); pip(16, 17); pip(23, 26)
+            // Right: 5 pips.
+            pip(42, 8); pip(58, 8); pip(50, 17); pip(42, 26); pip(58, 26)
+        }
+        return SKTexture(image: image)
+    }
+
+    /// A golden coin: rim, inner ring, and a bright crescent.
+    private static func coinTexture() -> SKTexture {
+        let diameter: CGFloat = 46
+        let size = CGSize(width: diameter, height: diameter)
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            let c = ctx.cgContext
+            let full = CGRect(origin: .zero, size: size)
+
+            UIColor(red: 0.86, green: 0.68, blue: 0.24, alpha: 1).setFill()
+            UIBezierPath(ovalIn: full).fill()
+
+            // Milled rim.
+            UIColor(red: 0.66, green: 0.50, blue: 0.14, alpha: 1).setStroke()
+            let rim = UIBezierPath(ovalIn: full.insetBy(dx: 1.5, dy: 1.5))
+            rim.lineWidth = 2.5
+            rim.stroke()
+
+            // Inner ring like an engraved face.
+            UIColor(red: 0.72, green: 0.55, blue: 0.16, alpha: 1).setStroke()
+            let inner = UIBezierPath(ovalIn: full.insetBy(dx: 8, dy: 8))
+            inner.lineWidth = 1.8
+            inner.stroke()
+
+            // Crescent shine toward the light.
+            if let sheen = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: [UIColor(white: 1, alpha: 0.55).cgColor,
+                         UIColor(white: 1, alpha: 0).cgColor] as CFArray,
+                locations: [0, 1]
+            ) {
+                c.addEllipse(in: full.insetBy(dx: 2, dy: 2))
+                c.clip()
+                let lightCenter = CGPoint(x: diameter * 0.32, y: diameter * 0.3)
+                c.drawRadialGradient(
+                    sheen,
+                    startCenter: lightCenter, startRadius: 0,
+                    endCenter: lightCenter, endRadius: diameter * 0.45,
+                    options: []
                 )
-                if distance < GameScene.holeRadius * 0.8 {
-                    fall(into: hole)
-                    break
-                }
             }
         }
-
-        // While airborne the ball keeps its launch velocity — you can't
-        // steer a ball that isn't touching the ground.
-        if !isAirborne, !isFalling, var tilt = currentTilt() {
-            if abs(tilt.dx) < GameScene.deadZone { tilt.dx = 0 }
-            if abs(tilt.dy) < GameScene.deadZone { tilt.dy = 0 }
-
-            // In portrait, the device's x/y axes line up with the screen's
-            // x/y axes, so the tilt maps directly to a screen-space target
-            // velocity that the ball converges on.
-            var target = CGVector(
-                dx: tilt.dx * GameScene.speedPerTilt,
-                dy: tilt.dy * GameScene.speedPerTilt
-            )
-            let speed = hypot(target.dx, target.dy)
-            if speed > GameScene.maxSpeed {
-                target.dx *= GameScene.maxSpeed / speed
-                target.dy *= GameScene.maxSpeed / speed
-            }
-
-            let blend = min(1, GameScene.responsiveness * dt)
-            var deltaX = (target.dx - body.velocity.dx) * blend
-            var deltaY = (target.dy - body.velocity.dy) * blend
-
-            // Cap the per-frame speed change so reversing direction ramps up
-            // like starting from rest instead of whipping around at double
-            // the usual acceleration.
-            let maxDelta = GameScene.maxAcceleration * dt
-            let delta = hypot(deltaX, deltaY)
-            if delta > maxDelta, delta > 0 {
-                deltaX *= maxDelta / delta
-                deltaY *= maxDelta / delta
-            }
-
-            body.velocity = CGVector(
-                dx: body.velocity.dx + deltaX,
-                dy: body.velocity.dy + deltaY
-            )
-        }
-
-        scrollSurfacePattern(velocity: body.velocity, dt: dt)
-        followBallWithCamera()
-    }
-
-    /// Keep the ball in view, clamping so the camera never shows past the
-    /// edge of the world.
-    private func followBallWithCamera() {
-        let halfWidth = size.width / 2
-        let halfHeight = size.height / 2
-        cameraNode.position = CGPoint(
-            x: min(max(ball.position.x, worldRect.minX + halfWidth), worldRect.maxX - halfWidth),
-            y: min(max(ball.position.y, worldRect.minY + halfHeight), worldRect.maxY - halfHeight)
-        )
-    }
-
-    /// Pop the ball into the air: it grows (closer to the viewer) while its
-    /// shadow shrinks, then lands with a small squash.
-    private func hop() {
-        isAirborne = true
-        let half = GameScene.hopDuration / 2
-
-        landingHaptic.prepare()
-
-        let rise = SKAction.scale(to: 1.45, duration: half)
-        rise.timingMode = .easeOut
-        let fall = SKAction.scale(to: 1.0, duration: half)
-        fall.timingMode = .easeIn
-        let land = SKAction.run { [weak self] in
-            self?.didLand()
-        }
-        let squash = SKAction.sequence([
-            .scaleX(to: 1.22, y: 0.78, duration: 0.07),
-            .scaleX(to: 0.94, y: 1.06, duration: 0.08),
-            .scaleX(to: 1.0, y: 1.0, duration: 0.07),
-        ])
-        // Steering returns at touchdown (in didLand); the squash afterwards
-        // is purely cosmetic.
-        ball.run(.sequence([rise, fall, land, squash]))
-
-        let shadowOut = SKAction.group([
-            .scale(to: 0.55, duration: half),
-            .fadeAlpha(to: 0.15, duration: half),
-        ])
-        shadowOut.timingMode = .easeOut
-        let shadowIn = SKAction.group([
-            .scale(to: 1.0, duration: half),
-            .fadeAlpha(to: 1.0, duration: half),
-        ])
-        shadowIn.timingMode = .easeIn
-        shadow.run(.sequence([shadowOut, shadowIn]))
-    }
-
-    // MARK: - Holes
-
-    private func startSpawningHoles() {
-        run(.repeatForever(.sequence([
-            .wait(forDuration: GameScene.holeSpawnInterval, withRange: 6.0),
-            .run { [weak self] in self?.spawnHole() },
-        ])))
-    }
-
-    /// Open a hole at a random spot (never right under the ball), let it
-    /// linger, then close it.
-    private func spawnHole() {
-        let inset = GameScene.holeRadius + 30
-        var position = CGPoint.zero
-        for _ in 0..<12 {
-            position = CGPoint(
-                x: CGFloat.random(in: (worldRect.minX + inset)...(worldRect.maxX - inset)),
-                y: CGFloat.random(in: (worldRect.minY + inset)...(worldRect.maxY - inset))
-            )
-            if hypot(position.x - ball.position.x, position.y - ball.position.y) > 140 {
-                break
-            }
-        }
-
-        let hole = SKSpriteNode(texture: GameScene.holeTexture(radius: GameScene.holeRadius))
-        hole.position = position
-        hole.zPosition = 2
-        hole.setScale(0)
-        addChild(hole)
-        holes.append(hole)
-
-        let open = SKAction.scale(to: 1.0, duration: 0.25)
-        open.timingMode = .easeOut
-        let close = SKAction.scale(to: 0, duration: 0.25)
-        close.timingMode = .easeIn
-        hole.run(.sequence([
-            open,
-            .wait(forDuration: GameScene.holeLifetime),
-            close,
-            .run { [weak self, weak hole] in
-                if let hole { self?.holes.removeAll { $0 === hole } }
-            },
-            .removeFromParent(),
-        ]))
-    }
-
-    /// The ball got over an open hole: suck it in, then respawn at center.
-    private func fall(into hole: SKSpriteNode) {
-        isFalling = true
-        fallHaptic.impactOccurred()
-        ball.physicsBody?.velocity = .zero
-
-        let suck = SKAction.group([
-            .move(to: hole.position, duration: 0.12),
-            .scale(to: 0.08, duration: 0.3),
-            .fadeOut(withDuration: 0.3),
-        ])
-        suck.timingMode = .easeIn
-
-        let respawn = SKAction.run { [weak self] in
-            guard let self else { return }
-            self.ball.position = CGPoint(x: self.worldRect.midX, y: self.worldRect.midY)
-            self.ball.setScale(0.3)
-            self.ball.run(.group([
-                .scale(to: 1.0, duration: 0.25),
-                .fadeIn(withDuration: 0.2),
-            ])) { self.isFalling = false }
-            self.shadow.run(.fadeIn(withDuration: 0.2))
-        }
-
-        shadow.run(.fadeOut(withDuration: 0.2))
-        ball.run(.sequence([suck, .wait(forDuration: 0.6), respawn]))
-    }
-
-    /// Landing impact: haptic thump and a dust-ring shockwave rippling out
-    /// across the floor from the touchdown point.
-    private func didLand() {
-        isAirborne = false
-        landingHaptic.impactOccurred()
-
-        let ring = SKShapeNode(circleOfRadius: GameScene.ballRadius)
-        ring.position = ball.position
-        ring.zPosition = 4
-        ring.fillColor = .clear
-        ring.strokeColor = SKColor(red: 0.93, green: 0.86, blue: 0.72, alpha: 0.65)
-        ring.lineWidth = 3
-        ring.setScale(0.6)
-        addChild(ring)
-
-        let expand = SKAction.scale(to: 2.1, duration: 0.35)
-        expand.timingMode = .easeOut
-        ring.run(.sequence([
-            .group([expand, .fadeOut(withDuration: 0.35)]),
-            .removeFromParent(),
-        ]))
-
-        // A few dust specks kicked out from under the ball.
-        for _ in 0..<8 {
-            let speck = SKShapeNode(circleOfRadius: CGFloat.random(in: 1.5...3))
-            speck.fillColor = SKColor(red: 0.93, green: 0.86, blue: 0.72, alpha: 0.55)
-            speck.strokeColor = .clear
-            speck.position = ball.position
-            speck.zPosition = 4
-            addChild(speck)
-
-            let angle = CGFloat.random(in: 0..<(2 * .pi))
-            let distance = CGFloat.random(in: 28...55)
-            let drift = SKAction.moveBy(
-                x: cos(angle) * distance,
-                y: sin(angle) * distance,
-                duration: 0.3
-            )
-            drift.timingMode = .easeOut
-            speck.run(.sequence([
-                .group([drift, .fadeOut(withDuration: 0.3)]),
-                .removeFromParent(),
-            ]))
-        }
-    }
-
-    /// Seen from above, a rolling ball's top surface moves in the direction of
-    /// travel — scroll the dots with the velocity and wrap them so the pattern
-    /// never runs out.
-    private func scrollSurfacePattern(velocity: CGVector, dt: CGFloat) {
-        let spacing = GameScene.dotSpacing
-        var position = dotPattern.position
-        position.x += velocity.dx * dt * 0.8
-        position.y += velocity.dy * dt * 0.8
-        position.x = position.x.truncatingRemainder(dividingBy: spacing)
-        position.y = position.y.truncatingRemainder(dividingBy: spacing)
-        dotPattern.position = position
-    }
-
-    /// The direction gravity pulls, in the device's frame, in G units.
-    /// Prefers device motion (filtered, smooth); falls back to the raw
-    /// accelerometer if device motion isn't available yet.
-    private func currentTilt() -> CGVector? {
-        if let gravity = motion.deviceMotion?.gravity {
-            return CGVector(dx: gravity.x, dy: gravity.y)
-        }
-        if let acceleration = motion.accelerometerData?.acceleration {
-            return CGVector(dx: acceleration.x, dy: acceleration.y)
-        }
-        return nil
+        return SKTexture(image: image)
     }
 }
