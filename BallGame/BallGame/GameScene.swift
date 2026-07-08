@@ -134,7 +134,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 17
+    private static let buildNumber = 18
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -248,9 +248,48 @@ final class GameScene: SKScene {
 
     // MARK: - Course construction
 
-    /// Warm wooden tabletop covering the whole world: one screen-sized tile
-    /// (planks sized to line up at tile edges) repeated over the field.
+    /// The deck floor. Uses the real pallet photo (deck.png) rotated 90° so
+    /// the slats run vertically, mirror-tiled across the world so the seams
+    /// between repeats line up. Falls back to the code-drawn wood if the
+    /// photo is missing from the bundle.
     private func setUpBackground(level: Level) {
+        if let photo = UIImage(named: "deck") {
+            tilePhotoBackground(photo)
+        } else {
+            tileProceduralBackground(level: level)
+        }
+    }
+
+    private func tilePhotoBackground(_ photo: UIImage) {
+        let texture = SKTexture(image: photo)
+        // Rotated 90°, the photo's height becomes the on-screen width.
+        // Scale so one tile spans exactly one screen width.
+        let scale = size.width / photo.size.height
+        let tileWidth = size.width
+        let tileHeight = photo.size.width * scale
+
+        let columns = Int(ceil(worldRect.width / tileWidth))
+        let rows = Int(ceil(worldRect.height / tileHeight))
+        for column in 0..<columns {
+            for row in 0..<rows {
+                let tile = SKSpriteNode(texture: texture)
+                tile.zRotation = .pi / 2
+                // Mirror alternate tiles so shared edges match seamlessly.
+                // After the 90° rotation, the node's y axis lies along the
+                // world's x axis and vice versa.
+                tile.yScale = scale * (column % 2 == 0 ? 1 : -1)
+                tile.xScale = scale * (row % 2 == 0 ? 1 : -1)
+                tile.position = CGPoint(
+                    x: tileWidth * (CGFloat(column) + 0.5),
+                    y: tileHeight * (CGFloat(row) + 0.5)
+                )
+                tile.zPosition = 0
+                addChild(tile)
+            }
+        }
+    }
+
+    private func tileProceduralBackground(level: Level) {
         let tileSize = size
         let texture = GameScene.woodTexture(size: tileSize)
         for column in 0..<level.screensWide {
