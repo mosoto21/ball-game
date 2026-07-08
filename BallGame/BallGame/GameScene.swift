@@ -134,7 +134,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 16
+    private static let buildNumber = 17
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -710,88 +710,155 @@ final class GameScene: SKScene {
 
     // MARK: - Procedural textures (the "real world" look, drawn in code)
 
-    /// Weathered outdoor duckboard (sunoko): horizontal sun-bleached slats
-    /// with dark gaps between them where the shade under the deck shows
-    /// through, fixed with nails at the ends.
+    /// Sun-bleached wooden pallet, vertical orientation: pale cream slats
+    /// running top-to-bottom with narrow gaps, horizontal support battens
+    /// and gray ground visible through the gaps, nail heads at each batten
+    /// crossing, occasional knots and plank seams.
     private static func woodTexture(size: CGSize) -> SKTexture {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 2 // wood is soft-detail; halves texture memory
         let image = UIGraphicsImageRenderer(size: size, format: format).image { ctx in
             let c = ctx.cgContext
 
-            // Shade beneath the deck, visible through the gaps.
-            UIColor(red: 0.10, green: 0.08, blue: 0.06, alpha: 1).setFill()
+            // Ground under the pallet: light warm gray, in shadow.
+            UIColor(red: 0.58, green: 0.56, blue: 0.52, alpha: 1).setFill()
             c.fill(CGRect(origin: .zero, size: size))
+            for _ in 0..<10 {
+                UIColor(white: 0, alpha: CGFloat.random(in: 0.04...0.09)).setFill()
+                let w = CGFloat.random(in: 60...180)
+                UIBezierPath(ovalIn: CGRect(
+                    x: CGFloat.random(in: -40...size.width),
+                    y: CGFloat.random(in: -40...size.height),
+                    width: w, height: w * 0.6
+                )).fill()
+            }
 
-            // Divides evenly into the tile height so slats line up when the
-            // tile repeats across the world.
-            let slatHeight: CGFloat = size.height / 8
-            let gap: CGFloat = 6
-            var y: CGFloat = 0
-            while y < size.height {
-                let slatRect = CGRect(x: 0, y: y + gap / 2,
-                                      width: size.width, height: slatHeight - gap)
+            // Horizontal support battens under the slats. Spacing divides the
+            // tile height so they line up when the tile repeats.
+            let battenSpacing = size.height / 4
+            let battenHeight: CGFloat = 30
+            var battenYs: [CGFloat] = []
+            var by: CGFloat = battenSpacing / 2
+            while by < size.height {
+                battenYs.append(by)
+                let rect = CGRect(x: 0, y: by - battenHeight / 2,
+                                  width: size.width, height: battenHeight)
+                UIColor(red: 0.68, green: 0.58, blue: 0.45, alpha: 1).setFill()
+                c.fill(rect)
+                UIColor(white: 0, alpha: 0.25).setFill()
+                c.fill(CGRect(x: 0, y: rect.maxY - 3, width: size.width, height: 3))
+                by += battenSpacing
+            }
 
-                // Sun-bleached, slightly gray wood; each slat its own tint.
-                let shade = CGFloat.random(in: -0.05...0.05)
-                UIColor(
-                    red: 0.64 + shade,
-                    green: 0.55 + shade,
-                    blue: 0.42 + shade * 0.8,
-                    alpha: 1
-                ).setFill()
-                c.fill(slatRect)
+            // Vertical slats. Width divides the tile width for seamless repeat.
+            let slatWidth: CGFloat = size.width / 7
+            let gap: CGFloat = 7
+            var x: CGFloat = 0
+            var column = 0
+            while x < size.width {
+                let slatRect = CGRect(x: x + gap / 2, y: 0,
+                                      width: slatWidth - gap, height: size.height)
 
-                // Horizontal grain streaks along the slat.
-                for _ in 0..<12 {
-                    let grainY = slatRect.minY + CGFloat.random(in: 3...(slatRect.height - 3))
+                // Some slats are two shorter planks with a seam.
+                let seamY: CGFloat? = (column % 3 == 1)
+                    ? size.height * CGFloat.random(in: 0.3...0.7) : nil
+                let segments: [CGRect]
+                if let seamY {
+                    segments = [
+                        CGRect(x: slatRect.minX, y: 0, width: slatRect.width, height: seamY),
+                        CGRect(x: slatRect.minX, y: seamY,
+                               width: slatRect.width, height: size.height - seamY),
+                    ]
+                } else {
+                    segments = [slatRect]
+                }
+
+                for segment in segments {
+                    // Pale bleached cream, each plank its own tint.
+                    let shade = CGFloat.random(in: -0.04...0.04)
+                    UIColor(
+                        red: 0.87 + shade,
+                        green: 0.80 + shade,
+                        blue: 0.67 + shade * 0.9,
+                        alpha: 1
+                    ).setFill()
+                    c.fill(segment)
+                }
+
+                // Fine vertical grain streaks.
+                for _ in 0..<9 {
+                    let grainX = slatRect.minX + CGFloat.random(in: 3...(slatRect.width - 3))
                     let path = UIBezierPath()
-                    path.move(to: CGPoint(x: -10, y: grainY))
-                    var gx: CGFloat = -10
-                    var wobbleY = grainY
-                    while gx < size.width + 10 {
-                        let nextX = gx + CGFloat.random(in: 70...160)
-                        let nextY = min(max(wobbleY + CGFloat.random(in: -4...4),
-                                            slatRect.minY + 2), slatRect.maxY - 2)
+                    path.move(to: CGPoint(x: grainX, y: -10))
+                    var gy: CGFloat = -10
+                    var wobbleX = grainX
+                    while gy < size.height + 10 {
+                        let nextY = gy + CGFloat.random(in: 80...170)
+                        let nextX = min(max(wobbleX + CGFloat.random(in: -4...4),
+                                            slatRect.minX + 2), slatRect.maxX - 2)
                         path.addQuadCurve(
                             to: CGPoint(x: nextX, y: nextY),
-                            controlPoint: CGPoint(x: (gx + nextX) / 2,
-                                                  y: wobbleY + CGFloat.random(in: -5...5))
+                            controlPoint: CGPoint(x: wobbleX + CGFloat.random(in: -5...5),
+                                                  y: (gy + nextY) / 2)
                         )
-                        wobbleY = nextY
-                        gx = nextX
+                        wobbleX = nextX
+                        gy = nextY
                     }
-                    UIColor(red: 0.38, green: 0.31, blue: 0.22,
-                            alpha: CGFloat.random(in: 0.06...0.16)).setStroke()
-                    path.lineWidth = CGFloat.random(in: 0.7...2.0)
+                    UIColor(red: 0.62, green: 0.53, blue: 0.40,
+                            alpha: CGFloat.random(in: 0.05...0.13)).setStroke()
+                    path.lineWidth = CGFloat.random(in: 0.6...1.6)
                     path.stroke()
                 }
 
-                // Slat edges: lit top edge, shadowed bottom edge.
-                UIColor(white: 1, alpha: 0.13).setFill()
-                c.fill(CGRect(x: 0, y: slatRect.minY, width: size.width, height: 2))
-                UIColor(white: 0, alpha: 0.22).setFill()
-                c.fill(CGRect(x: 0, y: slatRect.maxY - 2, width: size.width, height: 2))
-
-                // Nail heads near both ends.
-                for nailX in [CGFloat(14), size.width - 14] {
-                    let nailY = slatRect.midY + CGFloat.random(in: -6...6)
-                    UIColor(red: 0.32, green: 0.30, blue: 0.28, alpha: 1).setFill()
-                    UIBezierPath(ovalIn: CGRect(x: nailX - 2.5, y: nailY - 2.5,
-                                                width: 5, height: 5)).fill()
-                    UIColor(white: 1, alpha: 0.35).setFill()
-                    UIBezierPath(ovalIn: CGRect(x: nailX - 1.5, y: nailY - 1.5,
-                                                width: 2, height: 2)).fill()
+                // Occasional knot.
+                if column % 4 == 2 {
+                    let knotCenter = CGPoint(
+                        x: slatRect.midX + CGFloat.random(in: -8...8),
+                        y: CGFloat.random(in: size.height * 0.15...size.height * 0.85)
+                    )
+                    UIColor(red: 0.55, green: 0.45, blue: 0.32, alpha: 0.9).setFill()
+                    UIBezierPath(ovalIn: CGRect(x: knotCenter.x - 4, y: knotCenter.y - 6,
+                                                width: 8, height: 12)).fill()
+                    UIColor(red: 0.45, green: 0.36, blue: 0.25, alpha: 0.7).setStroke()
+                    let ring = UIBezierPath(ovalIn: CGRect(x: knotCenter.x - 7, y: knotCenter.y - 10,
+                                                           width: 14, height: 20))
+                    ring.lineWidth = 1.2
+                    ring.stroke()
                 }
 
-                y += slatHeight
+                // Seam between the two planks of a split slat.
+                if let seamY {
+                    UIColor(white: 0, alpha: 0.3).setFill()
+                    c.fill(CGRect(x: slatRect.minX, y: seamY - 1.5,
+                                  width: slatRect.width, height: 3))
+                }
+
+                // Slat edges: lit left edge, shadowed right edge.
+                UIColor(white: 1, alpha: 0.16).setFill()
+                c.fill(CGRect(x: slatRect.minX, y: 0, width: 2, height: size.height))
+                UIColor(white: 0, alpha: 0.16).setFill()
+                c.fill(CGRect(x: slatRect.maxX - 2, y: 0, width: 2, height: size.height))
+
+                // Nail heads where the slat crosses each batten.
+                for nailY in battenYs {
+                    let nailX = slatRect.midX + CGFloat.random(in: -5...5)
+                    UIColor(red: 0.42, green: 0.39, blue: 0.35, alpha: 1).setFill()
+                    UIBezierPath(ovalIn: CGRect(x: nailX - 2.2, y: nailY - 2.2,
+                                                width: 4.4, height: 4.4)).fill()
+                    UIColor(white: 1, alpha: 0.4).setFill()
+                    UIBezierPath(ovalIn: CGRect(x: nailX - 1.2, y: nailY - 1.2,
+                                                width: 1.8, height: 1.8)).fill()
+                }
+
+                x += slatWidth
+                column += 1
             }
 
-            // Gentle outdoor light falloff — much lighter than indoors.
+            // Gentle outdoor light falloff.
             if let vignette = CGGradient(
                 colorsSpace: CGColorSpaceCreateDeviceRGB(),
                 colors: [UIColor.clear.cgColor,
-                         UIColor(white: 0, alpha: 0.16).cgColor] as CFArray,
+                         UIColor(white: 0, alpha: 0.12).cgColor] as CFArray,
                 locations: [0, 1]
             ) {
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -968,16 +1035,16 @@ final class GameScene: SKScene {
                     y: center.y + sin(angle) * tipR
                 ))
                 splinter.close()
-                UIColor(red: 0.60 + CGFloat.random(in: -0.06...0.06),
-                        green: 0.50 + CGFloat.random(in: -0.05...0.05),
-                        blue: 0.36,
+                UIColor(red: 0.84 + CGFloat.random(in: -0.05...0.05),
+                        green: 0.76 + CGFloat.random(in: -0.05...0.05),
+                        blue: 0.61,
                         alpha: 1).setFill()
                 splinter.fill()
             }
             c.restoreGState()
 
             // Torn light edge where the wood snapped.
-            UIColor(red: 0.78, green: 0.68, blue: 0.52, alpha: 0.55).setStroke()
+            UIColor(red: 0.93, green: 0.87, blue: 0.74, alpha: 0.6).setStroke()
             rim.lineWidth = 1.8
             rim.stroke()
         }
