@@ -134,7 +134,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 19
+    private static let buildNumber = 20
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -420,7 +420,24 @@ final class GameScene: SKScene {
 
     enum BallPattern: Int, CaseIterable {
         case dots = 0, stripes, checker, plain
+        /// A skin the user painted themselves on the drawing canvas.
+        case custom = 4
     }
+
+    /// Where the user's hand-drawn skin is stored.
+    static var customSkinURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ballSkin.png")
+    }
+
+    static func loadCustomSkin() -> UIImage? {
+        guard let data = try? Data(contentsOf: customSkinURL) else { return nil }
+        return UIImage(data: data)
+    }
+
+    /// True when the ball wears a hand-drawn skin, which spins with motion
+    /// instead of scrolling (a drawing can't tile seamlessly).
+    private var isCustomSkin = false
 
     private func buildBallIfNeeded() {
         guard ball.physicsBody == nil else { return }
@@ -458,6 +475,21 @@ final class GameScene: SKScene {
         ]
         let pattern = BallPattern(rawValue: patternIndex) ?? .dots
 
+        dotPattern.position = .zero
+        dotPattern.zRotation = 0
+
+        if pattern == .custom, let skin = GameScene.loadCustomSkin() {
+            isCustomSkin = true
+            ball.fillColor = .white // shows through erased/transparent areas
+            dotPattern.removeAllChildren()
+            let sprite = SKSpriteNode(texture: SKTexture(image: skin))
+            sprite.size = CGSize(width: GameScene.ballRadius * 2,
+                                 height: GameScene.ballRadius * 2)
+            dotPattern.addChild(sprite)
+            return
+        }
+
+        isCustomSkin = false
         ball.fillColor = color
         rebuildSurfacePattern(pattern, on: color)
     }
@@ -621,6 +653,13 @@ final class GameScene: SKScene {
     /// travel — scroll the dots with the velocity and wrap them so the pattern
     /// never runs out.
     private func scrollSurfacePattern(velocity: CGVector, dt: CGFloat) {
+        // A painted skin can't tile, so spin it with the motion instead.
+        if isCustomSkin {
+            dotPattern.zRotation -= (velocity.dx + velocity.dy)
+                / GameScene.ballRadius * dt * 0.55
+            return
+        }
+
         let spacing = GameScene.dotSpacing
         var position = dotPattern.position
         position.x += velocity.dx * dt * 0.8
