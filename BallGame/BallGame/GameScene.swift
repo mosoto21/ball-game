@@ -548,6 +548,10 @@ final class GameScene: SKScene {
             }
         case .plain:
             break
+        case .custom:
+            // Handled in applyBallStyle (loads the drawn skin); nothing to
+            // tile here. Reached only if the skin file is missing.
+            break
         }
     }
 
