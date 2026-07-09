@@ -19,6 +19,7 @@ struct GameView: View {
         return scene
     }()
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showCustomizer = false
     @AppStorage("ballColor") private var ballColor = 0
     @AppStorage("ballPattern") private var ballPattern = 0
@@ -28,7 +29,9 @@ struct GameView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            SpriteView(scene: scene)
+            // Pausing while inactive stops SpriteKit from submitting GPU work
+            // in the background (silences the IOGPUMetal console errors).
+            SpriteView(scene: scene, isPaused: scenePhase != .active)
                 .ignoresSafeArea()
 
             Button {
@@ -318,6 +321,26 @@ struct BallDrawingView: View {
         .frame(width: canvasSize, height: canvasSize)
         .background(Circle().fill(.white))
         .clipShape(Circle())
+        // Sphere shading (same light as the in-game ball) so it feels like
+        // painting directly on the ball, not on a flat disc.
+        .overlay(
+            ZStack {
+                RadialGradient(
+                    gradient: Gradient(colors: [.clear, .black.opacity(0.30)]),
+                    center: UnitPoint(x: 0.42, y: 0.40),
+                    startRadius: canvasSize * 0.18,
+                    endRadius: canvasSize * 0.72
+                )
+                RadialGradient(
+                    gradient: Gradient(colors: [.white.opacity(0.5), .clear]),
+                    center: UnitPoint(x: 0.34, y: 0.28),
+                    startRadius: 2,
+                    endRadius: canvasSize * 0.38
+                )
+            }
+            .clipShape(Circle())
+            .allowsHitTesting(false)
+        )
         .overlay(Circle().stroke(Color.secondary.opacity(0.5), lineWidth: 2))
         .gesture(
             DragGesture(minimumDistance: 0)
