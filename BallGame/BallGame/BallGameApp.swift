@@ -193,7 +193,6 @@ final class SpherePainter: ObservableObject {
 
     @Published var selectedColor = 1
     @Published var isEraser = false
-    @Published var isRotateMode = false
     @Published var brushWidth: CGFloat = 12
     @Published private(set) var canUndo = false
 
@@ -404,17 +403,18 @@ struct SphereCanvasView: UIViewRepresentable {
         cameraNode.position = SCNVector3(0, 0, 2.7)
         scene.rootNode.addChildNode(cameraNode)
 
+        // Higher key/ambient contrast makes the sphere read as a lit object.
         let key = SCNNode()
         key.light = SCNLight()
         key.light?.type = .directional
-        key.light?.intensity = 750
-        key.eulerAngles = SCNVector3(-0.5, -0.4, 0)
+        key.light?.intensity = 950
+        key.eulerAngles = SCNVector3(-0.55, -0.45, 0)
         scene.rootNode.addChildNode(key)
 
         let ambient = SCNNode()
         ambient.light = SCNLight()
         ambient.light?.type = .ambient
-        ambient.light?.intensity = 550
+        ambient.light?.intensity = 380
         scene.rootNode.addChildNode(ambient)
 
         view.scene = scene
@@ -438,6 +438,12 @@ struct SphereCanvasView: UIViewRepresentable {
         let painter: SpherePainter
         var sphereNode: SCNNode?
 
+        /// Decided where the finger lands: on the ball paints, around it
+        /// rotates. Fixed for the whole drag so strokes that slip off the
+        /// edge don't suddenly start spinning the ball.
+        private enum DragMode { case none, paint, rotate }
+        private var dragMode: DragMode = .none
+
         init(painter: SpherePainter) {
             self.painter = painter
         }
@@ -445,45 +451,51 @@ struct SphereCanvasView: UIViewRepresentable {
         private func uv(at point: CGPoint, in view: SCNView) -> CGPoint? {
             guard let hit = view.hitTest(point, options: nil).first,
                   hit.node === sphereNode else { return nil }
-            let coords = hit.textureCoordinates(withMappingChannel: 0)
-            return coords
+            return hit.textureCoordinates(withMappingChannel: 0)
         }
 
         @objc func pan(_ gesture: UIPanGestureRecognizer) {
             guard let view = gesture.view as? SCNView else { return }
 
-            if painter.isRotateMode {
-                let translation = gesture.translation(in: view)
-                gesture.setTranslation(.zero, in: view)
-                guard let node = sphereNode else { return }
-                // Spin around the world axes so it always follows the finger.
-                let yaw = SCNMatrix4MakeRotation(Float(translation.x) * 0.012, 0, 1, 0)
-                let pitch = SCNMatrix4MakeRotation(Float(translation.y) * 0.012, 1, 0, 0)
-                node.transform = SCNMatrix4Mult(node.transform,
-                                                SCNMatrix4Mult(yaw, pitch))
-                return
-            }
-
             switch gesture.state {
             case .began:
                 if let uv = uv(at: gesture.location(in: view), in: view) {
+                    dragMode = .paint
                     painter.begin(at: uv)
+                } else {
+                    dragMode = .rotate
+                    gesture.setTranslation(.zero, in: view)
                 }
             case .changed:
-                if let uv = uv(at: gesture.location(in: view), in: view) {
-                    painter.continueStroke(to: uv)
-                } else {
-                    // Finger slid off the sphere: close the stroke.
-                    painter.endStroke()
+                switch dragMode {
+                case .paint:
+                    if let uv = uv(at: gesture.location(in: view), in: view) {
+                        painter.continueStroke(to: uv)
+                    } else {
+                        // Finger slid off the sphere: close the stroke (a
+                        // new one starts if it slides back on).
+                        painter.endStroke()
+                    }
+                case .rotate:
+                    let translation = gesture.translation(in: view)
+                    gesture.setTranslation(.zero, in: view)
+                    guard let node = sphereNode else { return }
+                    // Spin around the world axes so it follows the finger.
+                    let yaw = SCNMatrix4MakeRotation(Float(translation.x) * 0.012, 0, 1, 0)
+                    let pitch = SCNMatrix4MakeRotation(Float(translation.y) * 0.012, 1, 0, 0)
+                    node.transform = SCNMatrix4Mult(node.transform,
+                                                    SCNMatrix4Mult(yaw, pitch))
+                case .none:
+                    break
                 }
             default:
-                painter.endStroke()
+                if dragMode == .paint { painter.endStroke() }
+                dragMode = .none
             }
         }
 
         @objc func tap(_ gesture: UITapGestureRecognizer) {
-            guard !painter.isRotateMode,
-                  let view = gesture.view as? SCNView,
+            guard let view = gesture.view as? SCNView,
                   let uv = uv(at: gesture.location(in: view), in: view) else { return }
             painter.begin(at: uv)
             painter.endStroke()
@@ -502,14 +514,20 @@ struct BallDrawingView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
-                SphereCanvasView(painter: painter)
-                    .frame(height: 320)
-
-                Picker("モード", selection: $painter.isRotateMode) {
-                    Label("描く", systemImage: "paintbrush.pointed.fill").tag(false)
-                    Label("回す", systemImage: "rotate.3d").tag(true)
+                ZStack {
+                    // Soft floor shadow so the ball reads as a floating sphere.
+                    Ellipse()
+                        .fill(Color.black.opacity(0.32))
+                        .frame(width: 175, height: 34)
+                        .blur(radius: 12)
+                        .offset(y: 128)
+                    SphereCanvasView(painter: painter)
+                        .frame(height: 320)
                 }
-                .pickerStyle(.segmented)
+
+                Text("ボールの上をなぞって描く ・ まわりをドラッグして回す")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6),
                           spacing: 10) {
