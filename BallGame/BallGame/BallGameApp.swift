@@ -19,7 +19,6 @@ struct GameView: View {
         return scene
     }()
 
-    @Environment(\.scenePhase) private var scenePhase
     @State private var showCustomizer = false
     @AppStorage("ballColor") private var ballColor = 0
     @AppStorage("ballPattern") private var ballPattern = 0
@@ -29,9 +28,11 @@ struct GameView: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            // Pausing while inactive stops SpriteKit from submitting GPU work
-            // in the background (silences the IOGPUMetal console errors).
-            SpriteView(scene: scene, isPaused: scenePhase != .active)
+            // Note: the IOGPUMetal "background execution" console messages
+            // are harmless (iOS refusing GPU work while backgrounded);
+            // binding isPaused to scenePhase to silence them destabilized
+            // rendering, so we deliberately leave them be.
+            SpriteView(scene: scene)
                 .ignoresSafeArea()
 
             Button {
@@ -325,17 +326,24 @@ struct BallDrawingView: View {
         // painting directly on the ball, not on a flat disc.
         .overlay(
             ZStack {
+                // Deep falloff into shadow toward the lower-right edge.
                 RadialGradient(
-                    gradient: Gradient(colors: [.clear, .black.opacity(0.30)]),
-                    center: UnitPoint(x: 0.42, y: 0.40),
-                    startRadius: canvasSize * 0.18,
-                    endRadius: canvasSize * 0.72
+                    gradient: Gradient(stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .clear, location: 0.45),
+                        .init(color: .black.opacity(0.22), location: 0.75),
+                        .init(color: .black.opacity(0.55), location: 1.0),
+                    ]),
+                    center: UnitPoint(x: 0.40, y: 0.36),
+                    startRadius: 0,
+                    endRadius: canvasSize * 0.78
                 )
+                // Bright specular highlight where the light hits.
                 RadialGradient(
-                    gradient: Gradient(colors: [.white.opacity(0.5), .clear]),
-                    center: UnitPoint(x: 0.34, y: 0.28),
-                    startRadius: 2,
-                    endRadius: canvasSize * 0.38
+                    gradient: Gradient(colors: [.white.opacity(0.75), .clear]),
+                    center: UnitPoint(x: 0.32, y: 0.26),
+                    startRadius: 0,
+                    endRadius: canvasSize * 0.30
                 )
             }
             .clipShape(Circle())
