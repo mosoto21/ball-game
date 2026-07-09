@@ -134,7 +134,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 20
+    private static let buildNumber = 21
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -482,10 +482,21 @@ final class GameScene: SKScene {
             isCustomSkin = true
             ball.fillColor = .white // shows through erased/transparent areas
             dotPattern.removeAllChildren()
-            let sprite = SKSpriteNode(texture: SKTexture(image: skin))
-            sprite.size = CGSize(width: GameScene.ballRadius * 2,
-                                 height: GameScene.ballRadius * 2)
-            dotPattern.addChild(sprite)
+            // Tile the drawing 3×3 with a period of one ball diameter, so the
+            // scroller can wrap it like the dot pattern: the drawing slides
+            // off one side and returns from the other — reads as the ball
+            // rolling in any direction, vertical included.
+            let texture = SKTexture(image: skin)
+            let diameter = GameScene.ballRadius * 2
+            for column in -1...1 {
+                for row in -1...1 {
+                    let sprite = SKSpriteNode(texture: texture)
+                    sprite.size = CGSize(width: diameter, height: diameter)
+                    sprite.position = CGPoint(x: CGFloat(column) * diameter,
+                                              y: CGFloat(row) * diameter)
+                    dotPattern.addChild(sprite)
+                }
+            }
             return
         }
 
@@ -657,14 +668,9 @@ final class GameScene: SKScene {
     /// travel — scroll the dots with the velocity and wrap them so the pattern
     /// never runs out.
     private func scrollSurfacePattern(velocity: CGVector, dt: CGFloat) {
-        // A painted skin can't tile, so spin it with the motion instead.
-        if isCustomSkin {
-            dotPattern.zRotation -= (velocity.dx + velocity.dy)
-                / GameScene.ballRadius * dt * 0.55
-            return
-        }
-
-        let spacing = GameScene.dotSpacing
+        // Painted skins wrap with a period of one diameter (one full "turn");
+        // the built-in patterns repeat every dotSpacing.
+        let spacing = isCustomSkin ? GameScene.ballRadius * 2 : GameScene.dotSpacing
         var position = dotPattern.position
         position.x += velocity.dx * dt * 0.8
         position.y += velocity.dy * dt * 0.8
