@@ -13,12 +13,16 @@ and catch it when it falls through a hole. Full concept in
 - ✅ **Adventure mode** — three hand-built desk courses: roll from start to
   the glowing goal hole past pencils, erasers, dominoes and coin bumpers,
   hopping over trap holes; falling restarts the level.
-- ⬜ Milestone 3 — ball rolls between two phones placed side by side
+- ✅ **Milestone 3** — ball rolls between two phones placed side by side.
 - ✅ **Milestone 4** — catch the falling ball with a phone held underneath:
   with two phones connected, a ball that drops into a hole falls *through*
   the desk. On the other phone a shadow swells at the same spot on screen —
-  hold that phone level (face up) underneath and the ball lands with a
-  bounce; tilt it away and the ball whiffs past and returns to the thrower.
+  keep that phone roughly level (it forgives up to ~70° of tilt) and the
+  ball lands with a bounce; hold it near-vertical or face down and the ball
+  whiffs past and returns to the thrower.
+- ✅ **Menu screen** — pick ひとりであそぶ (solo; no peer search) or
+  ふたりであそぶ (auto-connects to a nearby iPhone) at launch; the house
+  button in-game returns to the menu.
 
 ## How to run it on your iPhone
 

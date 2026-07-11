@@ -12,6 +12,10 @@ struct BallGameApp: App {
 }
 
 struct GameView: View {
+    enum GameMode {
+        case solo, multiplayer
+    }
+
     // Created once and kept alive — recreating the scene on every SwiftUI
     // render would spawn a new motion manager each time and reset the game.
     @State private var scene: GameScene = {
@@ -20,6 +24,8 @@ struct GameView: View {
         return scene
     }()
 
+    /// nil while the menu is showing.
+    @State private var mode: GameMode?
     @State private var showCustomizer = false
     @AppStorage("ballColor") private var ballColor = 0
     @AppStorage("ballPattern") private var ballPattern = 0
@@ -28,32 +34,15 @@ struct GameView: View {
     @AppStorage("skinVersion") private var skinVersion = 0
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            // Note: the IOGPUMetal "background execution" console messages
-            // are harmless (iOS refusing GPU work while backgrounded).
-            SpriteView(scene: scene)
-                .ignoresSafeArea()
-
-            Button {
-                showCustomizer = true
-            } label: {
-                Circle()
-                    .fill(Color(GameScene.ballColors[
-                        min(max(ballColor, 0), GameScene.ballColors.count - 1)
-                    ]))
-                    .frame(width: 34, height: 34)
-                    .overlay {
-                        if ballPattern == GameScene.BallPattern.custom.rawValue {
-                            Image(systemName: "paintbrush.pointed.fill")
-                                .font(.caption)
-                                .foregroundStyle(.white)
-                        }
-                    }
-                    .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 2))
-                    .shadow(radius: 3, y: 2)
+        Group {
+            if mode == nil {
+                MenuView { selected in
+                    scene.setMultiplayer(selected == .multiplayer)
+                    mode = selected
+                }
+            } else {
+                gameBody
             }
-            .padding(.trailing, 20)
-            .padding(.top, 8)
         }
         .statusBarHidden()
         .sheet(isPresented: $showCustomizer) {
@@ -63,6 +52,142 @@ struct GameView: View {
         .onChange(of: ballColor) { _ in scene.applyBallStyle() }
         .onChange(of: ballPattern) { _ in scene.applyBallStyle() }
         .onChange(of: skinVersion) { _ in scene.applyBallStyle() }
+    }
+
+    private var gameBody: some View {
+        ZStack(alignment: .top) {
+            // Note: the IOGPUMetal "background execution" console messages
+            // are harmless (iOS refusing GPU work while backgrounded).
+            SpriteView(scene: scene)
+                .ignoresSafeArea()
+
+            HStack {
+                Button {
+                    // Back to the menu; solo/multi is picked fresh there.
+                    scene.setMultiplayer(false)
+                    mode = nil
+                } label: {
+                    Image(systemName: "house.fill")
+                        .font(.callout)
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(.black.opacity(0.35)))
+                        .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 2))
+                        .shadow(radius: 3, y: 2)
+                }
+
+                Spacer()
+
+                Button {
+                    showCustomizer = true
+                } label: {
+                    Circle()
+                        .fill(Color(GameScene.ballColors[
+                            min(max(ballColor, 0), GameScene.ballColors.count - 1)
+                        ]))
+                        .frame(width: 34, height: 34)
+                        .overlay {
+                            if ballPattern == GameScene.BallPattern.custom.rawValue {
+                                Image(systemName: "paintbrush.pointed.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.white)
+                            }
+                        }
+                        .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 2))
+                        .shadow(radius: 3, y: 2)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+        }
+    }
+}
+
+/// The title screen: pick solo play or connect with a nearby iPhone.
+struct MenuView: View {
+    let onSelect: (GameView.GameMode) -> Void
+    @AppStorage("ballColor") private var ballColor = 0
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.96, green: 0.90, blue: 0.78),
+                    Color(red: 0.87, green: 0.76, blue: 0.58),
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 44) {
+                VStack(spacing: 14) {
+                    Circle()
+                        .fill(Color(GameScene.ballColors[
+                            min(max(ballColor, 0), GameScene.ballColors.count - 1)
+                        ]))
+                        .frame(width: 88, height: 88)
+                        .overlay(
+                            Circle()
+                                .fill(.white.opacity(0.45))
+                                .frame(width: 26, height: 26)
+                                .offset(x: -18, y: -20)
+                        )
+                        .shadow(color: .black.opacity(0.3), radius: 10, y: 8)
+
+                    Text("ボールゲーム")
+                        .font(.system(size: 38, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color(red: 0.25, green: 0.15, blue: 0.08))
+                    Text("かたむけてころがそう")
+                        .font(.system(.subheadline, design: .rounded))
+                        .foregroundStyle(Color(red: 0.25, green: 0.15, blue: 0.08).opacity(0.6))
+                }
+
+                VStack(spacing: 16) {
+                    modeButton(
+                        title: "ひとりであそぶ",
+                        subtitle: "コースをクリアしよう",
+                        icon: "person.fill"
+                    ) { onSelect(.solo) }
+
+                    modeButton(
+                        title: "ふたりであそぶ",
+                        subtitle: "近くのiPhoneと自動でつながる\n横にならべてパス・穴から下の子へドロップ",
+                        icon: "person.2.fill"
+                    ) { onSelect(.multiplayer) }
+                }
+                .padding(.horizontal, 32)
+            }
+        }
+    }
+
+    private func modeButton(title: String, subtitle: String, icon: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.title2)
+                    .frame(width: 40)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(.title3, design: .rounded))
+                        .fontWeight(.bold)
+                    Text(subtitle)
+                        .font(.system(.caption, design: .rounded))
+                        .multilineTextAlignment(.leading)
+                        .opacity(0.75)
+                }
+                Spacer()
+            }
+            .foregroundStyle(Color(red: 0.25, green: 0.15, blue: 0.08))
+            .padding(.vertical, 16)
+            .padding(.horizontal, 18)
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(.white.opacity(0.75))
+                    .shadow(color: .black.opacity(0.12), radius: 6, y: 4)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 

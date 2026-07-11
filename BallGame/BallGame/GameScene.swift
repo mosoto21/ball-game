@@ -138,12 +138,27 @@ final class GameScene: SKScene {
     private let multipeer = MultipeerManager()
     /// Holds the wall physics; side walls open while a peer is connected.
     private let wallsNode = SKNode()
+    /// Chosen on the menu screen: whether this session looks for a second
+    /// phone. Solo play never advertises or browses.
+    private var multiplayerEnabled = false
     private var peerConnected = false
     /// False while the ball is visiting the other phone.
     private var ballIsHere = true
     /// True after dropping the ball through a hole, until the peer reports
     /// whether the catch underneath succeeded.
     private var awaitingDropResult = false
+
+    /// Called from the menu when a mode is picked (or when returning to the
+    /// menu, with `false`, which also drops any live connection).
+    func setMultiplayer(_ enabled: Bool) {
+        multiplayerEnabled = enabled
+        if enabled {
+            multipeer.start()
+        } else {
+            multipeer.stop()
+        }
+        updateConnectionLabel()
+    }
     private let connectionLabel = SKLabelNode()
     /// The style the ball is currently wearing. Travels with the ball, so a
     /// visiting ball keeps its owner's design.
@@ -154,7 +169,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 27
+    private static let buildNumber = 28
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -188,7 +203,10 @@ final class GameScene: SKScene {
     private static let dropFallDuration: TimeInterval = 1.5
     /// How level the catching phone must be at the moment of landing.
     /// Gravity along the screen normal is -1 G when perfectly face up.
-    private static let catchLevelThreshold: Double = -0.75
+    /// Lenient (~70° of tilt still counts) because players naturally hold
+    /// the phone tilted toward themselves while steering; only a phone
+    /// held near-vertical or face down misses the catch.
+    private static let catchLevelThreshold: Double = -0.35
     /// Give up on a drop and respawn if the peer never reports a result.
     private static let dropResultTimeout: TimeInterval = 4.0
     /// Grid spacing of the dots on the ball's surface.
@@ -217,7 +235,9 @@ final class GameScene: SKScene {
             case .dropResult(let caught): self?.handleDropResult(caught: caught)
             }
         }
-        multipeer.start()
+        if multiplayerEnabled {
+            multipeer.start()
+        }
     }
 
     /// Tear down the old course and build the new one. The ball, shadow and
@@ -480,6 +500,10 @@ final class GameScene: SKScene {
     }
 
     private func updateConnectionLabel() {
+        guard multiplayerEnabled else {
+            connectionLabel.text = ""
+            return
+        }
         if peerConnected {
             connectionLabel.text = "● \(multipeer.connectedPeerName ?? "つながった")"
             connectionLabel.fontColor = SKColor(red: 0.15, green: 0.6, blue: 0.25, alpha: 0.9)
@@ -1824,14 +1848,28 @@ final class MultipeerManager: NSObject {
 
     private(set) var isConnected = false
     private(set) var connectedPeerName: String?
+    private var isRunning = false
     /// Called on the main thread when a message arrives from the peer.
     var onMessage: ((PeerMessage) -> Void)?
 
     func start() {
+        guard !isRunning else { return }
+        isRunning = true
         advertiser.delegate = self
         browser.delegate = self
         advertiser.startAdvertisingPeer()
         browser.startBrowsingForPeers()
+    }
+
+    /// Stop looking for peers and drop any live connection (solo play).
+    func stop() {
+        guard isRunning else { return }
+        isRunning = false
+        advertiser.stopAdvertisingPeer()
+        browser.stopBrowsingForPeers()
+        session.disconnect()
+        isConnected = false
+        connectedPeerName = nil
     }
 
     func send(_ message: PeerMessage) {
