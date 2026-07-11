@@ -1621,7 +1621,7 @@ extension MultipeerManager: MCNearbyServiceAdvertiserDelegate {
 
 extension MultipeerManager: MCNearbyServiceBrowserDelegate {
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID,
-                 withInfo info: [String: String]?) {
+                 withDiscoveryInfo info: [String: String]?) {
         // Only the lexicographically smaller name sends the invitation, so
         // the two phones don't both invite each other at once.
         if self.peerID.displayName < peerID.displayName {
