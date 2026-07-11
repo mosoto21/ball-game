@@ -172,7 +172,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 29
+    private static let buildNumber = 30
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -202,9 +202,9 @@ final class GameScene: SKScene {
     /// Radius of a hole in the floor.
     private static let holeRadius: CGFloat = 34
     /// Time a dropped ball spends falling through the air between phones.
-    /// Stacked phones sit a few centimeters apart, so the fall is quick —
-    /// the ball should feel like it really passes through the hole.
-    private static let dropFallDuration: TimeInterval = 0.45
+    /// Stacked phones sit a few centimeters apart, so the fall is near
+    /// instant — the catcher must already be in position underneath.
+    private static let dropFallDuration: TimeInterval = 0.12
     /// After landing from a drop, the ball can't fall into a hole for this
     /// long. Both phones show the same course, so the landing spot sits at
     /// the twin of the hole it just fell through — without a grace period
@@ -212,10 +212,11 @@ final class GameScene: SKScene {
     private static let catchGraceDuration: TimeInterval = 0.8
     /// How level the catching phone must be at the moment of landing.
     /// Gravity along the screen normal is -1 G when perfectly face up.
-    /// Lenient (~70° of tilt still counts) because players naturally hold
-    /// the phone tilted toward themselves while steering; only a phone
-    /// held near-vertical or face down misses the catch.
-    private static let catchLevelThreshold: Double = -0.35
+    /// Strict (within ~30° of flat): the normal steering grip is tilted
+    /// more than this, so a catch only happens when the player deliberately
+    /// holds the phone flat like a tray underneath — not just because the
+    /// phone happened to be roughly upright somewhere nearby.
+    private static let catchLevelThreshold: Double = -0.85
     /// Give up on a drop and respawn if the peer never reports a result.
     private static let dropResultTimeout: TimeInterval = 4.0
     /// Grid spacing of the dots on the ball's surface.
@@ -1015,8 +1016,6 @@ final class GameScene: SKScene {
             self?.ball.isHidden = true
             self?.ballIsHere = false
         }]))
-
-        showToast("下のスマホでキャッチ！")
 
         // If the peer never answers (disconnected mid-fall), bring it home.
         run(.sequence([

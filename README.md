@@ -16,12 +16,13 @@ and catch it when it falls through a hole. Full concept in
 - ✅ **Milestone 3** — ball rolls between two phones placed side by side.
 - ✅ **Milestone 4** — catch the falling ball with a phone held underneath:
   with two phones connected, a ball that drops into a hole falls *through*
-  the desk in under half a second, keeping its momentum. The landing spot
-  is mapped in physical points from the screen center (so an SE above a
-  16 Pro still lines up) and is nudged clear of the lower course's own
-  holes, with a brief grace period so the ball can't fall straight back
-  down forever. Keep the catching phone roughly level (up to ~70° of tilt
-  is fine) — near-vertical or face down misses and the ball returns.
+  the desk almost instantly, keeping its momentum — so the catcher must
+  already be waiting underneath, holding their phone flat like a tray
+  (within ~30° of level; a normal tilted steering grip misses and the
+  ball returns to the thrower). The landing spot is mapped in physical
+  points from the screen center (so an SE above a 16 Pro still lines up)
+  and is nudged clear of the lower course's own holes, with a brief grace
+  period so the ball can't fall straight back down forever.
 - ✅ **Menu screen** — pick ひとりであそぶ (solo; no peer search) or
   ふたりであそぶ (auto-connects to a nearby iPhone) at launch; the house
   button in-game returns to the menu.
