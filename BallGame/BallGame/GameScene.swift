@@ -1905,7 +1905,7 @@ extension MultipeerManager: MCSessionDelegate {
                  fromPeer peerID: MCPeerID, with progress: Progress) {}
     func session(_ session: MCSession,
                  didFinishReceivingResourceWithName resourceName: String,
-                 fromPeer peerID: MCPeerID, at localURL: URL?, error: Error?) {}
+                 fromPeer peerID: MCPeerID, at localURL: URL?, withError error: Error?) {}
 }
 
 extension MultipeerManager: MCNearbyServiceAdvertiserDelegate {
