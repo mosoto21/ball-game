@@ -3,6 +3,15 @@ import CoreMotion
 import UIKit
 import MultipeerConnectivity
 
+/// Device-language localization, the way international apps behave: a
+/// phone set to Japanese shows Japanese, every other language falls back
+/// to English. (iOS follows the device language, not the store country.)
+enum L10n {
+    static let isJapanese = Locale.preferredLanguages.first?.hasPrefix("ja") ?? false
+    /// Pick the string for the device language.
+    static func t(_ ja: String, _ en: String) -> String { isJapanese ? ja : en }
+}
+
 /// Adventure mode: hand-built courses on a wooden desk. Tilt to roll the
 /// ball from the start to the glowing goal hole, past everyday desk objects,
 /// without dropping into a trap hole. Flick the phone up to hop over traps.
@@ -150,6 +159,15 @@ final class GameScene: SKScene {
     /// True briefly after catching a dropped ball; holes don't swallow the
     /// ball while set (see catchGraceDuration).
     private var isDropGrace = false
+    /// Rolling record of recent frames that showed hand-tremor motion. A
+    /// phone resting on the desk is dead still; a phone held in a hand
+    /// always jitters a little. This is the "underneath" check without UWB:
+    /// a catch requires the phone to actually be held, so a phone lying
+    /// beside the thrower on the desk can't magically catch the ball.
+    private var handheldHistory: [Bool] = []
+    private var isHandHeld: Bool {
+        handheldHistory.lazy.filter { $0 }.count >= GameScene.handheldMinSamples
+    }
 
     /// Called from the menu when a mode is picked (or when returning to the
     /// menu, with `false`, which also drops any live connection).
@@ -172,7 +190,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 30
+    private static let buildNumber = 31
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -210,6 +228,17 @@ final class GameScene: SKScene {
     /// the twin of the hole it just fell through — without a grace period
     /// it would fall forever between the two phones.
     private static let catchGraceDuration: TimeInterval = 0.8
+    /// Hand-tremor window: how many recent frames to remember (~1.2 s at
+    /// 60 fps) and how many of them must show motion for the phone to count
+    /// as held in a hand. Desk-resting noise stays near zero; the brief
+    /// buzz of the thrower's haptic traveling through the desk is far
+    /// shorter than the required sample count.
+    private static let handheldWindow = 72
+    private static let handheldMinSamples = 10
+    /// Per-frame motion thresholds that count as tremor: user acceleration
+    /// in G (gravity removed) and rotation rate in rad/s.
+    private static let handheldAccelThreshold = 0.02
+    private static let handheldRotationThreshold = 0.05
     /// How level the catching phone must be at the moment of landing.
     /// Gravity along the screen normal is -1 G when perfectly face up.
     /// Strict (within ~30° of flat): the normal steering grip is tilted
@@ -516,10 +545,10 @@ final class GameScene: SKScene {
             return
         }
         if peerConnected {
-            connectionLabel.text = "● \(multipeer.connectedPeerName ?? "つながった")"
+            connectionLabel.text = "● \(multipeer.connectedPeerName ?? L10n.t("つながった", "Connected"))"
             connectionLabel.fontColor = SKColor(red: 0.15, green: 0.6, blue: 0.25, alpha: 0.9)
         } else {
-            connectionLabel.text = "○ 相手をさがしています…"
+            connectionLabel.text = L10n.t("○ 相手をさがしています…", "○ Looking for a nearby iPhone…")
             connectionLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.5)
         }
     }
@@ -704,6 +733,20 @@ final class GameScene: SKScene {
         lastUpdateTime = currentTime
 
         guard let body = ball.physicsBody else { return }
+
+        // Sample hand tremor every frame (even while the ball is on the
+        // other phone) so a drop can check whether this phone is held.
+        if let deviceMotion = motion.deviceMotion {
+            let accel = deviceMotion.userAcceleration
+            let rotation = deviceMotion.rotationRate
+            let moving =
+                hypot(hypot(accel.x, accel.y), accel.z) > GameScene.handheldAccelThreshold
+                || hypot(hypot(rotation.x, rotation.y), rotation.z) > GameScene.handheldRotationThreshold
+            handheldHistory.append(moving)
+            if handheldHistory.count > GameScene.handheldWindow {
+                handheldHistory.removeFirst(handheldHistory.count - GameScene.handheldWindow)
+            }
+        }
 
         // Track the connection: open/close the side walls and, if the peer
         // vanished while holding the ball, bring it home.
@@ -1037,9 +1080,9 @@ final class GameScene: SKScene {
         if caught {
             // The ball lives on the other phone now.
             isFalling = false
-            showToast("ナイスキャッチ！")
+            showToast(L10n.t("ナイスキャッチ！", "Nice catch!"))
         } else {
-            showToast("キャッチミス！ボールがもどってきた")
+            showToast(L10n.t("キャッチミス！ボールがもどってきた", "Missed! The ball came back"))
             respawnBall()
         }
     }
@@ -1155,18 +1198,23 @@ final class GameScene: SKScene {
         return point
     }
 
-    /// The falling ball reached this phone's plane. Held anywhere near
-    /// level it's a catch and the ball rolls on with the momentum it fell
-    /// in with; held near-vertical or face down it whiffs past and the
-    /// thrower gets it back.
+    /// The falling ball reached this phone's plane. It's a catch only when
+    /// this phone is actually held in a hand (a phone resting on the desk
+    /// beside the thrower can't be underneath) AND held flat like a tray;
+    /// otherwise the ball whiffs past and the thrower gets it back.
     private func resolveDropLanding(at point: CGPoint, velocity: CGVector) {
         let gravityZ = motion.deviceMotion?.gravity.z ?? -1
-        let caught = gravityZ < GameScene.catchLevelThreshold
+        let isLevel = gravityZ < GameScene.catchLevelThreshold
+        let held = isHandHeld
+        let caught = isLevel && held
         multipeer.send(.dropResult(caught: caught))
 
         guard caught else {
             fallHaptic.impactOccurred()
-            showToast("ミス！ボールは上にもどった")
+            showToast(held
+                ? L10n.t("ミス！水平にかまえて！", "Miss! Hold your phone flat!")
+                : L10n.t("ミス！手に持って下でかまえて！",
+                         "Miss! Hold your phone in your hand underneath!"))
             return
         }
 
@@ -1201,7 +1249,7 @@ final class GameScene: SKScene {
             .run { [weak self] in self?.didLand() },
             squash,
         ]))
-        showToast("キャッチ！")
+        showToast(L10n.t("キャッチ！", "Catch!"))
     }
 
     /// A short message that pops in under the level label and fades away.

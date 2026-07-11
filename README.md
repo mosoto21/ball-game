@@ -19,10 +19,18 @@ and catch it when it falls through a hole. Full concept in
   the desk almost instantly, keeping its momentum — so the catcher must
   already be waiting underneath, holding their phone flat like a tray
   (within ~30° of level; a normal tilted steering grip misses and the
-  ball returns to the thrower). The landing spot is mapped in physical
-  points from the screen center (so an SE above a 16 Pro still lines up)
-  and is nudged clear of the lower course's own holes, with a brief grace
-  period so the ball can't fall straight back down forever.
+  ball returns to the thrower). The catch also requires the phone to be
+  *held in a hand* — hand tremor is detectable, so a phone lying on the
+  desk beside the thrower can never catch (phones have no UWB-free way to
+  know true relative position, but "resting on the desk" is provably not
+  "held underneath"). The landing spot is mapped in physical points from
+  the screen center (so an SE above a 16 Pro still lines up) and is
+  nudged clear of the lower course's own holes, with a brief grace period
+  so the ball can't fall straight back down forever.
+- ✅ **Localization** — follows the device language like any international
+  app: Japanese devices get Japanese, everything else falls back to
+  English (App Store country doesn't matter; iOS apps read the phone's
+  language setting).
 - ✅ **Menu screen** — pick ひとりであそぶ (solo; no peer search) or
   ふたりであそぶ (auto-connects to a nearby iPhone) at launch; the house
   button in-game returns to the menu.

@@ -134,24 +134,25 @@ struct MenuView: View {
                         )
                         .shadow(color: .black.opacity(0.3), radius: 10, y: 8)
 
-                    Text("ボールゲーム")
+                    Text(L10n.t("ボールゲーム", "Ball Game"))
                         .font(.system(size: 38, weight: .heavy, design: .rounded))
                         .foregroundStyle(Color(red: 0.25, green: 0.15, blue: 0.08))
-                    Text("かたむけてころがそう")
+                    Text(L10n.t("かたむけてころがそう", "Tilt your phone to roll"))
                         .font(.system(.subheadline, design: .rounded))
                         .foregroundStyle(Color(red: 0.25, green: 0.15, blue: 0.08).opacity(0.6))
                 }
 
                 VStack(spacing: 16) {
                     modeButton(
-                        title: "ひとりであそぶ",
-                        subtitle: "コースをクリアしよう",
+                        title: L10n.t("ひとりであそぶ", "Play Solo"),
+                        subtitle: L10n.t("コースをクリアしよう", "Clear the desk courses"),
                         icon: "person.fill"
                     ) { onSelect(.solo) }
 
                     modeButton(
-                        title: "ふたりであそぶ",
-                        subtitle: "近くのiPhoneと自動でつながる\n横にならべてパス・穴から下の子へドロップ",
+                        title: L10n.t("ふたりであそぶ", "Play Together"),
+                        subtitle: L10n.t("近くのiPhoneと自動でつながる\n横にならべてパス・穴から下の子へドロップ",
+                                          "Auto-connects to a nearby iPhone\nPass side by side, drop through holes to a phone below"),
                         icon: "person.2.fill"
                     ) { onSelect(.multiplayer) }
                 }
@@ -201,17 +202,17 @@ struct BallCustomizerView: View {
     @State private var showDrawing = false
 
     private let patterns: [(name: String, icon: String)] = [
-        ("ドット", "circle.grid.2x2.fill"),
-        ("しま", "line.3.horizontal"),
-        ("チェック", "squareshape.split.2x2"),
-        ("むじ", "circle.fill"),
-        ("お絵描き", "paintbrush.pointed.fill"),
+        (L10n.t("ドット", "Dots"), "circle.grid.2x2.fill"),
+        (L10n.t("しま", "Stripes"), "line.3.horizontal"),
+        (L10n.t("チェック", "Checker"), "squareshape.split.2x2"),
+        (L10n.t("むじ", "Plain"), "circle.fill"),
+        (L10n.t("お絵描き", "Draw"), "paintbrush.pointed.fill"),
     ]
 
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 22) {
-                Text("色")
+                Text(L10n.t("色", "Color"))
                     .font(.headline)
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4),
                           spacing: 14) {
@@ -232,7 +233,7 @@ struct BallCustomizerView: View {
                     }
                 }
 
-                Text("がら")
+                Text(L10n.t("がら", "Pattern"))
                     .font(.headline)
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 5),
                           spacing: 10) {
@@ -275,7 +276,7 @@ struct BallCustomizerView: View {
                     Button {
                         showDrawing = true
                     } label: {
-                        Label("ボールに描く", systemImage: "paintbrush.pointed")
+                        Label(L10n.t("ボールに描く", "Paint the ball"), systemImage: "paintbrush.pointed")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                     }
@@ -285,11 +286,11 @@ struct BallCustomizerView: View {
                 Spacer()
             }
             .padding(22)
-            .navigationTitle("ボールをカスタマイズ")
+            .navigationTitle(L10n.t("ボールをカスタマイズ", "Customize Ball"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完了") { dismiss() }
+                    Button(L10n.t("完了", "Done")) { dismiss() }
                 }
             }
             .sheet(isPresented: $showDrawing) {
@@ -650,7 +651,8 @@ struct BallDrawingView: View {
                         .frame(height: 320)
                 }
 
-                Text("ボールの上をなぞって描く ・ まわりをドラッグして回す")
+                Text(L10n.t("ボールの上をなぞって描く ・ まわりをドラッグして回す",
+                            "Draw on the ball ・ drag around it to spin"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -698,7 +700,7 @@ struct BallDrawingView: View {
                     Button {
                         painter.undo()
                     } label: {
-                        Label("もどす", systemImage: "arrow.uturn.backward")
+                        Label(L10n.t("もどす", "Undo"), systemImage: "arrow.uturn.backward")
                     }
                     .disabled(!painter.canUndo)
 
@@ -707,20 +709,20 @@ struct BallDrawingView: View {
                     Button(role: .destructive) {
                         painter.clear()
                     } label: {
-                        Label("全部消す", systemImage: "trash")
+                        Label(L10n.t("全部消す", "Clear all"), systemImage: "trash")
                     }
                     .disabled(!painter.canUndo)
                 }
             }
             .padding(20)
-            .navigationTitle("ボールに描く")
+            .navigationTitle(L10n.t("ボールに描く", "Paint the Ball"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("キャンセル") { dismiss() }
+                    Button(L10n.t("キャンセル", "Cancel")) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
+                    Button(L10n.t("保存", "Save")) {
                         painter.saveSkin()
                         onSave()
                         dismiss()

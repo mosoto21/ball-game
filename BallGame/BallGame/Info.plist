@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>近くの iPhone とボールをやり取りするために使います。</string>
+	<string>Used to pass the ball to a nearby iPhone. / 近くの iPhone とボールをやり取りするために使います。</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_kkk-ball._tcp</string>
