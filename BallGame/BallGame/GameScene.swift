@@ -1,6 +1,7 @@
 import SpriteKit
 import CoreMotion
 import UIKit
+import MultipeerConnectivity
 
 /// Adventure mode: hand-built courses on a wooden desk. Tilt to roll the
 /// ball from the start to the glowing goal hole, past everyday desk objects,
@@ -131,10 +132,26 @@ final class GameScene: SKScene {
     /// Fanfare buzz when a level is cleared.
     private let goalHaptic = UINotificationFeedbackGenerator()
 
+    // MARK: Multipeer state
+
+    /// Connection to the neighboring phone (Milestone 3).
+    private let multipeer = MultipeerManager()
+    /// Holds the wall physics; side walls open while a peer is connected.
+    private let wallsNode = SKNode()
+    private var peerConnected = false
+    /// False while the ball is visiting the other phone.
+    private var ballIsHere = true
+    private let connectionLabel = SKLabelNode()
+    /// The style the ball is currently wearing. Travels with the ball, so a
+    /// visiting ball keeps its owner's design.
+    private var displayedColorIndex = 0
+    private var displayedPatternIndex = 0
+    private var displayedSkinData: Data?
+
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 25
+    private static let buildNumber = 26
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -181,6 +198,11 @@ final class GameScene: SKScene {
 
         buildBallIfNeeded()
         loadLevel(levelIndex)
+
+        multipeer.onBallReceived = { [weak self] transfer in
+            self?.receiveBall(transfer)
+        }
+        multipeer.start()
     }
 
     /// Tear down the old course and build the new one. The ball, shadow and
@@ -209,8 +231,8 @@ final class GameScene: SKScene {
 
         setUpBackground(level: level)
 
-        physicsBody = SKPhysicsBody(edgeLoopFrom: worldRect)
-        physicsBody?.friction = 0.1
+        addChild(wallsNode)
+        rebuildWalls()
 
         for trap in level.traps {
             addTrap(at: denormalize(trap))
@@ -221,6 +243,9 @@ final class GameScene: SKScene {
         }
 
         // Ball and shadow return at the level's start.
+        ballIsHere = true
+        ball.isHidden = false
+        shadow.isHidden = false
         ball.removeAllActions()
         ball.setScale(1)
         ball.alpha = 1
@@ -237,6 +262,32 @@ final class GameScene: SKScene {
 
         setUpHUD(levelNumber: index + 1)
         followBallWithCamera()
+    }
+
+    /// Solo play keeps a full wall loop; with a peer connected the left and
+    /// right walls open so the ball can roll off to the neighboring phone.
+    private func rebuildWalls() {
+        wallsNode.removeAllChildren()
+
+        func addWall(_ body: SKPhysicsBody) {
+            body.friction = 0.1
+            let node = SKNode()
+            node.physicsBody = body
+            wallsNode.addChild(node)
+        }
+
+        if peerConnected {
+            addWall(SKPhysicsBody(
+                edgeFrom: CGPoint(x: worldRect.minX, y: worldRect.minY),
+                to: CGPoint(x: worldRect.maxX, y: worldRect.minY)
+            ))
+            addWall(SKPhysicsBody(
+                edgeFrom: CGPoint(x: worldRect.minX, y: worldRect.maxY),
+                to: CGPoint(x: worldRect.maxX, y: worldRect.maxY)
+            ))
+        } else {
+            addWall(SKPhysicsBody(edgeLoopFrom: worldRect))
+        }
     }
 
     private func denormalize(_ point: CGPoint) -> CGPoint {
@@ -401,6 +452,25 @@ final class GameScene: SKScene {
         buildLabel.position = CGPoint(x: 0, y: -size.height / 2 + 40)
         buildLabel.zPosition = 100
         cameraNode.addChild(buildLabel)
+
+        connectionLabel.fontName = "AvenirNext-DemiBold"
+        connectionLabel.fontSize = 13
+        connectionLabel.horizontalAlignmentMode = .left
+        connectionLabel.position = CGPoint(x: -size.width / 2 + 16,
+                                           y: size.height / 2 - 74)
+        connectionLabel.zPosition = 100
+        updateConnectionLabel()
+        cameraNode.addChild(connectionLabel)
+    }
+
+    private func updateConnectionLabel() {
+        if peerConnected {
+            connectionLabel.text = "● \(multipeer.connectedPeerName ?? "つながった")"
+            connectionLabel.fontColor = SKColor(red: 0.15, green: 0.6, blue: 0.25, alpha: 0.9)
+        } else {
+            connectionLabel.text = "○ 相手をさがしています…"
+            connectionLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.5)
+        }
     }
 
     // MARK: - Ball & custom styles
@@ -468,17 +538,27 @@ final class GameScene: SKScene {
     /// Read the saved color/pattern choice and restyle the ball. Called at
     /// launch and whenever the customizer changes a value.
     func applyBallStyle() {
-        let colorIndex = UserDefaults.standard.integer(forKey: "ballColor")
-        let patternIndex = UserDefaults.standard.integer(forKey: "ballPattern")
+        displayedColorIndex = UserDefaults.standard.integer(forKey: "ballColor")
+        displayedPatternIndex = UserDefaults.standard.integer(forKey: "ballPattern")
+        displayedSkinData =
+            displayedPatternIndex == BallPattern.custom.rawValue
+                ? try? Data(contentsOf: GameScene.customSkinURL) : nil
+        applyDisplayedStyle()
+    }
+
+    /// Restyle the ball from the displayed-style state (either this player's
+    /// saved choices, or the design that arrived with a visiting ball).
+    private func applyDisplayedStyle() {
         let color = GameScene.ballColors[
-            min(max(colorIndex, 0), GameScene.ballColors.count - 1)
+            min(max(displayedColorIndex, 0), GameScene.ballColors.count - 1)
         ]
-        let pattern = BallPattern(rawValue: patternIndex) ?? .dots
+        let pattern = BallPattern(rawValue: displayedPatternIndex) ?? .dots
 
         dotPattern.position = .zero
         dotPattern.zRotation = 0
 
-        if pattern == .custom, let skin = GameScene.loadCustomSkin() {
+        if pattern == .custom, let data = displayedSkinData,
+           let skin = UIImage(data: data) {
             isCustomSkin = true
             ball.fillColor = .white // shows through erased/transparent areas
             dotPattern.removeAllChildren()
@@ -574,6 +654,23 @@ final class GameScene: SKScene {
 
         guard let body = ball.physicsBody else { return }
 
+        // Track the connection: open/close the side walls and, if the peer
+        // vanished while holding the ball, bring it home.
+        if multipeer.isConnected != peerConnected {
+            peerConnected = multipeer.isConnected
+            rebuildWalls()
+            updateConnectionLabel()
+            if !peerConnected, !ballIsHere {
+                ballIsHere = true
+                ball.isHidden = false
+                shadow.isHidden = false
+                ball.position = startPosition
+                body.velocity = .zero
+            }
+        }
+
+        guard ballIsHere else { return }
+
         // A sharp upward pop of the phone (acceleration out of the screen,
         // beyond gravity) launches the ball into a hop.
         if !isAirborne, !isFalling, !isTransitioning,
@@ -585,6 +682,14 @@ final class GameScene: SKScene {
         }
 
         shadow.position = CGPoint(x: ball.position.x, y: ball.position.y - 4)
+
+        // The ball rolled past an open side edge: hand it to the other phone.
+        if peerConnected, !isFalling, !isTransitioning,
+           ball.position.x < worldRect.minX - GameScene.ballRadius
+            || ball.position.x > worldRect.maxX + GameScene.ballRadius {
+            sendBallToPeer()
+            return
+        }
 
         if !isAirborne, !isFalling, !isTransitioning {
             // Reaching the goal wins the level.
@@ -805,6 +910,65 @@ final class GameScene: SKScene {
 
         shadow.run(.fadeOut(withDuration: 0.2))
         ball.run(.sequence([suck, .wait(forDuration: 0.6), respawn]))
+    }
+
+    // MARK: - Ball transfer between phones
+
+    /// The ball left through an open side edge: ship its motion and style to
+    /// the peer, then hide it here until it comes back.
+    private func sendBallToPeer() {
+        guard let body = ball.physicsBody else { return }
+
+        let transfer = BallTransfer(
+            yFraction: Double((ball.position.y - worldRect.minY) / worldRect.height),
+            velocityDX: Double(body.velocity.dx),
+            velocityDY: Double(body.velocity.dy),
+            exitedRightEdge: ball.position.x > worldRect.midX,
+            colorIndex: displayedColorIndex,
+            patternIndex: displayedPatternIndex,
+            skinPNG: displayedPatternIndex == BallPattern.custom.rawValue
+                ? displayedSkinData : nil
+        )
+        multipeer.send(transfer)
+
+        ballIsHere = false
+        ball.isHidden = true
+        shadow.isHidden = true
+        body.velocity = .zero
+        // Park the ball just inside the edge so the camera rests there.
+        ball.position.x = min(max(ball.position.x, worldRect.minX + GameScene.ballRadius),
+                              worldRect.maxX - GameScene.ballRadius)
+    }
+
+    /// A ball arrived from the other phone: it enters on the opposite side
+    /// it left, keeping its speed and its owner's looks.
+    private func receiveBall(_ transfer: BallTransfer) {
+        guard let body = ball.physicsBody else { return }
+
+        ballIsHere = true
+        isFalling = false
+        isAirborne = false
+        ball.removeAllActions()
+        shadow.removeAllActions()
+        ball.setScale(1)
+        ball.alpha = 1
+        shadow.setScale(1)
+        shadow.alpha = 1
+        ball.isHidden = false
+        shadow.isHidden = false
+
+        displayedColorIndex = transfer.colorIndex
+        displayedPatternIndex = transfer.patternIndex
+        displayedSkinData = transfer.skinPNG
+        applyDisplayedStyle()
+
+        let x = transfer.exitedRightEdge
+            ? worldRect.minX + GameScene.ballRadius
+            : worldRect.maxX - GameScene.ballRadius
+        let y = worldRect.minY + CGFloat(transfer.yFraction) * worldRect.height
+        ball.position = CGPoint(x: x, y: min(max(y, worldRect.minY + GameScene.ballRadius),
+                                             worldRect.maxY - GameScene.ballRadius))
+        body.velocity = CGVector(dx: transfer.velocityDX, dy: transfer.velocityDY)
     }
 
     /// The ball reached the goal: celebrate, then move to the next level.
@@ -1356,4 +1520,114 @@ final class GameScene: SKScene {
         }
         return SKTexture(image: image)
     }
+}
+
+// MARK: - Phone-to-phone ball transfer (Milestone 3)
+
+/// Everything the ball carries when it hops to the neighboring phone.
+struct BallTransfer: Codable {
+    /// Vertical position at the moment of exit, as a 0...1 fraction of the
+    /// world height, so different screen sizes line up sensibly.
+    let yFraction: Double
+    let velocityDX: Double
+    let velocityDY: Double
+    /// True if it left through the right edge (so it enters on the left).
+    let exitedRightEdge: Bool
+    let colorIndex: Int
+    let patternIndex: Int
+    let skinPNG: Data?
+}
+
+/// Finds the nearby phone running the game (Multipeer Connectivity works
+/// over Bluetooth and local Wi-Fi, no server needed), auto-connects, and
+/// ferries the ball back and forth.
+final class MultipeerManager: NSObject {
+    private static let serviceType = "kkk-ball"
+
+    // iOS reports a generic device name for privacy, so both phones could be
+    // called "iPhone" — the random suffix keeps the tie-break working.
+    private let peerID = MCPeerID(
+        displayName: "\(UIDevice.current.name)-\(Int.random(in: 100...999))"
+    )
+
+    private lazy var session: MCSession = {
+        let session = MCSession(peer: peerID,
+                                securityIdentity: nil,
+                                encryptionPreference: .required)
+        session.delegate = self
+        return session
+    }()
+    private lazy var advertiser = MCNearbyServiceAdvertiser(
+        peer: peerID, discoveryInfo: nil, serviceType: Self.serviceType)
+    private lazy var browser = MCNearbyServiceBrowser(
+        peer: peerID, serviceType: Self.serviceType)
+
+    private(set) var isConnected = false
+    private(set) var connectedPeerName: String?
+    /// Called on the main thread when a ball arrives from the peer.
+    var onBallReceived: ((BallTransfer) -> Void)?
+
+    func start() {
+        advertiser.delegate = self
+        browser.delegate = self
+        advertiser.startAdvertisingPeer()
+        browser.startBrowsingForPeers()
+    }
+
+    func send(_ transfer: BallTransfer) {
+        guard !session.connectedPeers.isEmpty,
+              let data = try? JSONEncoder().encode(transfer) else { return }
+        try? session.send(data, toPeers: session.connectedPeers, with: .reliable)
+    }
+}
+
+extension MultipeerManager: MCSessionDelegate {
+    func session(_ session: MCSession, peer peerID: MCPeerID,
+                 didChange state: MCSessionState) {
+        DispatchQueue.main.async {
+            self.isConnected = !session.connectedPeers.isEmpty
+            self.connectedPeerName = session.connectedPeers.first?.displayName
+        }
+    }
+
+    func session(_ session: MCSession, didReceive data: Data,
+                 fromPeer peerID: MCPeerID) {
+        guard let transfer = try? JSONDecoder().decode(BallTransfer.self,
+                                                       from: data) else { return }
+        DispatchQueue.main.async {
+            self.onBallReceived?(transfer)
+        }
+    }
+
+    // Unused stream/resource channels.
+    func session(_ session: MCSession, didReceive stream: InputStream,
+                 withName streamName: String, fromPeer peerID: MCPeerID) {}
+    func session(_ session: MCSession,
+                 didStartReceivingResourceWithName resourceName: String,
+                 fromPeer peerID: MCPeerID, with progress: Progress) {}
+    func session(_ session: MCSession,
+                 didFinishReceivingResourceWithName resourceName: String,
+                 fromPeer peerID: MCPeerID, at localURL: URL?, error: Error?) {}
+}
+
+extension MultipeerManager: MCNearbyServiceAdvertiserDelegate {
+    func advertiser(_ advertiser: MCNearbyServiceAdvertiser,
+                    didReceiveInvitationFromPeer peerID: MCPeerID,
+                    withContext context: Data?,
+                    invitationHandler: @escaping (Bool, MCSession?) -> Void) {
+        invitationHandler(true, session)
+    }
+}
+
+extension MultipeerManager: MCNearbyServiceBrowserDelegate {
+    func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID,
+                 withInfo info: [String: String]?) {
+        // Only the lexicographically smaller name sends the invitation, so
+        // the two phones don't both invite each other at once.
+        if self.peerID.displayName < peerID.displayName {
+            browser.invitePeer(peerID, to: session, withContext: nil, timeout: 15)
+        }
+    }
+
+    func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {}
 }
