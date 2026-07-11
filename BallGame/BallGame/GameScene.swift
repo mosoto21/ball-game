@@ -147,6 +147,9 @@ final class GameScene: SKScene {
     /// True after dropping the ball through a hole, until the peer reports
     /// whether the catch underneath succeeded.
     private var awaitingDropResult = false
+    /// True briefly after catching a dropped ball; holes don't swallow the
+    /// ball while set (see catchGraceDuration).
+    private var isDropGrace = false
 
     /// Called from the menu when a mode is picked (or when returning to the
     /// menu, with `false`, which also drops any live connection).
@@ -169,7 +172,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 28
+    private static let buildNumber = 29
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -198,9 +201,15 @@ final class GameScene: SKScene {
     private static let hopCooldown: TimeInterval = 1.0
     /// Radius of a hole in the floor.
     private static let holeRadius: CGFloat = 34
-    /// Time a dropped ball spends falling through the air between phones —
-    /// long enough for the catcher to slide their phone underneath.
-    private static let dropFallDuration: TimeInterval = 1.5
+    /// Time a dropped ball spends falling through the air between phones.
+    /// Stacked phones sit a few centimeters apart, so the fall is quick —
+    /// the ball should feel like it really passes through the hole.
+    private static let dropFallDuration: TimeInterval = 0.45
+    /// After landing from a drop, the ball can't fall into a hole for this
+    /// long. Both phones show the same course, so the landing spot sits at
+    /// the twin of the hole it just fell through — without a grace period
+    /// it would fall forever between the two phones.
+    private static let catchGraceDuration: TimeInterval = 0.8
     /// How level the catching phone must be at the moment of landing.
     /// Gravity along the screen normal is -1 G when perfectly face up.
     /// Lenient (~70° of tilt still counts) because players naturally hold
@@ -251,6 +260,7 @@ final class GameScene: SKScene {
         isFalling = false
         isTransitioning = false
         awaitingDropResult = false
+        isDropGrace = false
         lastUpdateTime = nil
 
         let level = GameScene.levels[index]
@@ -742,9 +752,10 @@ final class GameScene: SKScene {
             )
             if goalDistance < GameScene.holeRadius * 0.8 {
                 reachGoal()
-            } else {
+            } else if !isDropGrace {
                 // A grounded ball rolling over a trap falls in; a hopping
-                // ball sails right over.
+                // ball sails right over. A just-caught ball gets a moment
+                // of immunity so it can't fall straight back down.
                 for hole in holes {
                     let distance = hypot(
                         ball.position.x - hole.position.x,
@@ -975,14 +986,17 @@ final class GameScene: SKScene {
         isFalling = true
         awaitingDropResult = true
         fallHaptic.impactOccurred()
+        let exitVelocity = ball.physicsBody?.velocity ?? .zero
         ball.physicsBody?.velocity = .zero
 
-        // Send the hole's spot as a fraction of the visible screen: the
-        // catching phone sits physically underneath, so the same spot on its
-        // screen is where the ball should land.
+        // Send the hole's spot as a point offset from the screen center:
+        // the catching phone sits physically underneath, so the same spot
+        // on its screen is where the ball should land.
         let drop = BallDrop(
-            xScreenFraction: Double((hole.position.x - cameraNode.position.x) / size.width + 0.5),
-            yScreenFraction: Double((hole.position.y - cameraNode.position.y) / size.height + 0.5),
+            xOffsetPoints: Double(hole.position.x - cameraNode.position.x),
+            yOffsetPoints: Double(hole.position.y - cameraNode.position.y),
+            velocityDX: Double(exitVelocity.dx),
+            velocityDY: Double(exitVelocity.dy),
             colorIndex: displayedColorIndex,
             patternIndex: displayedPatternIndex,
             skinPNG: displayedPatternIndex == BallPattern.custom.rawValue
@@ -1071,19 +1085,16 @@ final class GameScene: SKScene {
         applyDisplayedStyle()
 
         // Map the sender's screen spot onto the part of the world this
-        // camera is showing — stacked phones share the same physical spot.
+        // camera is showing — stacked phones share the same physical spot —
+        // then shift clear of this course's own holes, because both phones
+        // run the same course and the twin of the hole it fell through sits
+        // exactly at the landing spot.
         let landing = CGPoint(
-            x: cameraNode.position.x + (CGFloat(drop.xScreenFraction) - 0.5) * size.width,
-            y: cameraNode.position.y + (CGFloat(drop.yScreenFraction) - 0.5) * size.height
+            x: cameraNode.position.x + CGFloat(drop.xOffsetPoints),
+            y: cameraNode.position.y + CGFloat(drop.yOffsetPoints)
         )
-        let clamped = CGPoint(
-            x: min(max(landing.x, worldRect.minX + GameScene.ballRadius),
-                   worldRect.maxX - GameScene.ballRadius),
-            y: min(max(landing.y, worldRect.minY + GameScene.ballRadius),
-                   worldRect.maxY - GameScene.ballRadius)
-        )
+        let clamped = clampToWorld(safeLandingPoint(clampToWorld(landing)))
 
-        showToast("ボールが落ちてくる！水平にかまえて！")
         landingHaptic.prepare()
 
         // The ball closing in from above, seen as its growing shadow.
@@ -1100,17 +1111,56 @@ final class GameScene: SKScene {
             .fadeAlpha(to: 1.0, duration: GameScene.dropFallDuration),
         ])
         swell.timingMode = .easeIn
+        let velocity = CGVector(dx: drop.velocityDX, dy: drop.velocityDY)
         dropShadow.run(.sequence([
             swell,
-            .run { [weak self] in self?.resolveDropLanding(at: clamped) },
+            .run { [weak self] in
+                self?.resolveDropLanding(at: clamped, velocity: velocity)
+            },
             .removeFromParent(),
         ]))
     }
 
-    /// The falling ball reached this phone's plane. Held level, it's a
-    /// catch and the ball bounces in; tilted away, it whiffs past and the
+    private func clampToWorld(_ point: CGPoint) -> CGPoint {
+        CGPoint(
+            x: min(max(point.x, worldRect.minX + GameScene.ballRadius),
+                   worldRect.maxX - GameScene.ballRadius),
+            y: min(max(point.y, worldRect.minY + GameScene.ballRadius),
+                   worldRect.maxY - GameScene.ballRadius)
+        )
+    }
+
+    /// Push a landing point out of any hole (trap or goal) it would drop
+    /// straight into, so a caught ball settles on solid ground beside it.
+    private func safeLandingPoint(_ point: CGPoint) -> CGPoint {
+        var point = point
+        let clearance = GameScene.holeRadius + GameScene.ballRadius
+        for center in holes.map(\.position) + [goalPosition] {
+            let dx = point.x - center.x
+            let dy = point.y - center.y
+            let distance = hypot(dx, dy)
+            guard distance < clearance else { continue }
+            if distance < 1 {
+                // Dead center: pick the direction toward the world middle
+                // so the push never shoves the ball out of bounds.
+                let toCenterX = worldRect.midX - center.x
+                let toCenterY = worldRect.midY - center.y
+                let length = max(hypot(toCenterX, toCenterY), 1)
+                point = CGPoint(x: center.x + toCenterX / length * clearance,
+                                y: center.y + toCenterY / length * clearance)
+            } else {
+                point = CGPoint(x: center.x + dx / distance * clearance,
+                                y: center.y + dy / distance * clearance)
+            }
+        }
+        return point
+    }
+
+    /// The falling ball reached this phone's plane. Held anywhere near
+    /// level it's a catch and the ball rolls on with the momentum it fell
+    /// in with; held near-vertical or face down it whiffs past and the
     /// thrower gets it back.
-    private func resolveDropLanding(at point: CGPoint) {
+    private func resolveDropLanding(at point: CGPoint, velocity: CGVector) {
         let gravityZ = motion.deviceMotion?.gravity.z ?? -1
         let caught = gravityZ < GameScene.catchLevelThreshold
         multipeer.send(.dropResult(caught: caught))
@@ -1127,13 +1177,20 @@ final class GameScene: SKScene {
         ball.position = point
         // Arrives from above: starts big (close to the viewer) and settles.
         ball.setScale(1.6)
-        ball.physicsBody?.velocity = .zero
+        ball.physicsBody?.velocity = velocity
         shadow.isHidden = false
         shadow.alpha = 1
         shadow.setScale(1)
         shadow.position = point
 
-        let settle = SKAction.scale(to: 1.0, duration: 0.18)
+        // Immunity so the landing spot's own hole can't swallow it back.
+        isDropGrace = true
+        run(.sequence([
+            .wait(forDuration: GameScene.catchGraceDuration),
+            .run { [weak self] in self?.isDropGrace = false },
+        ]), withKey: "dropGrace")
+
+        let settle = SKAction.scale(to: 1.0, duration: 0.14)
         settle.timingMode = .easeIn
         let squash = SKAction.sequence([
             .scaleX(to: 1.22, y: 0.78, duration: 0.07),
@@ -1145,7 +1202,7 @@ final class GameScene: SKScene {
             .run { [weak self] in self?.didLand() },
             squash,
         ]))
-        showToast("ナイスキャッチ！")
+        showToast("キャッチ！")
     }
 
     /// A short message that pops in under the level label and fades away.
@@ -1812,11 +1869,17 @@ struct BallTransfer: Codable {
 /// Everything the ball carries when it falls through a hole toward the
 /// phone held underneath.
 struct BallDrop: Codable {
-    /// Where the hole sat on the sender's visible screen (0...1 on each
-    /// axis). Stacked phones share the same physical spot, so the catcher
-    /// lands the ball at the same fraction of its own screen.
-    let xScreenFraction: Double
-    let yScreenFraction: Double
+    /// Where the hole sat on the sender's screen, as an offset in points
+    /// from the screen center. Points are close to the same physical size
+    /// on every iPhone, so with the two phones stacked center-on-center
+    /// the ball lands at (nearly) the same real-world spot — unlike screen
+    /// fractions, which drift when the screens are different sizes.
+    let xOffsetPoints: Double
+    let yOffsetPoints: Double
+    /// The roll it fell in with; the landing keeps this momentum so the
+    /// ball feels like it passed straight through the hole.
+    let velocityDX: Double
+    let velocityDY: Double
     let colorIndex: Int
     let patternIndex: Int
     let skinPNG: Data?
