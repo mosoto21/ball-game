@@ -12,10 +12,6 @@ struct BallGameApp: App {
 }
 
 struct GameView: View {
-    enum GameMode {
-        case solo, multiplayer
-    }
-
     // Created once and kept alive — recreating the scene on every SwiftUI
     // render would spawn a new motion manager each time and reset the game.
     @State private var scene: GameScene = {
@@ -25,7 +21,7 @@ struct GameView: View {
     }()
 
     /// nil while the menu is showing.
-    @State private var mode: GameMode?
+    @State private var mode: GameScene.PlayMode?
     @State private var showCustomizer = false
     @AppStorage("ballColor") private var ballColor = 0
     @AppStorage("ballPattern") private var ballPattern = 0
@@ -37,7 +33,7 @@ struct GameView: View {
         Group {
             if mode == nil {
                 MenuView { selected in
-                    scene.setMultiplayer(selected == .multiplayer)
+                    scene.setPlayMode(selected)
                     mode = selected
                 }
             } else {
@@ -63,8 +59,8 @@ struct GameView: View {
 
             HStack {
                 Button {
-                    // Back to the menu; solo/multi is picked fresh there.
-                    scene.setMultiplayer(false)
+                    // Back to the menu; the mode is picked fresh there.
+                    scene.setPlayMode(.solo)
                     mode = nil
                 } label: {
                     Image(systemName: "house.fill")
@@ -103,9 +99,10 @@ struct GameView: View {
     }
 }
 
-/// The title screen: pick solo play or connect with a nearby iPhone.
+/// The title screen: play alone, or declare how the two phones are
+/// physically arranged (they can't sense it themselves).
 struct MenuView: View {
-    let onSelect: (GameView.GameMode) -> Void
+    let onSelect: (GameScene.PlayMode) -> Void
     @AppStorage("ballColor") private var ballColor = 0
 
     var body: some View {
@@ -150,11 +147,18 @@ struct MenuView: View {
                     ) { onSelect(.solo) }
 
                     modeButton(
-                        title: L10n.t("ふたりであそぶ", "Play Together"),
-                        subtitle: L10n.t("近くのiPhoneと自動でつながる\n横にならべてパス・穴から下の子へドロップ",
-                                          "Auto-connects to a nearby iPhone\nPass side by side, drop through holes to a phone below"),
-                        icon: "person.2.fill"
-                    ) { onSelect(.multiplayer) }
+                        title: L10n.t("よこにならべてあそぶ", "Side by Side"),
+                        subtitle: L10n.t("2台を横にならべて、はしからはしへパス",
+                                          "Two iPhones next to each other — pass across the edges"),
+                        icon: "rectangle.split.2x1"
+                    ) { onSelect(.sideBySide) }
+
+                    modeButton(
+                        title: L10n.t("うえしたであそぶ", "Stacked Drop"),
+                        subtitle: L10n.t("穴に落ちたボールが下のiPhoneへ！\n下のiPhoneは画面を上に向けて置いて待とう",
+                                          "A ball in a hole drops to the iPhone below!\nLeave the lower iPhone face up and wait"),
+                        icon: "square.stack"
+                    ) { onSelect(.stacked) }
                 }
                 .padding(.horizontal, 32)
             }

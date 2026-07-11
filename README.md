@@ -14,19 +14,20 @@ and catch it when it falls through a hole. Full concept in
   the glowing goal hole past pencils, erasers, dominoes and coin bumpers,
   hopping over trap holes; falling restarts the level.
 - ✅ **Milestone 3** — ball rolls between two phones placed side by side.
-- ✅ **Milestone 4** — catch the falling ball with a phone held underneath:
-  with two phones connected, a ball that drops into a hole falls *through*
-  the desk almost instantly, keeping its momentum — so the catcher must
-  already be waiting underneath, holding their phone flat like a tray
-  (within ~30° of level; a normal tilted steering grip misses and the
-  ball returns to the thrower). The catch also requires the phone to be
-  *held in a hand* — hand tremor is detectable, so a phone lying on the
-  desk beside the thrower can never catch (phones have no UWB-free way to
-  know true relative position, but "resting on the desk" is provably not
-  "held underneath"). The landing spot is mapped in physical points from
-  the screen center (so an SE above a 16 Pro still lines up) and is
-  nudged clear of the lower course's own holes, with a brief grace period
-  so the ball can't fall straight back down forever.
+- ✅ **Milestone 4** — catch the falling ball with a phone underneath.
+  Phones can't sense their physical arrangement (no UWB on the SE), so
+  the menu asks how you're playing:
+  - **よこにならべて / Side by Side** — the side walls open and the ball
+    rolls across the edges; holes stay normal traps, nothing ever drops
+    "down" to a phone that's actually beside you.
+  - **うえした / Stacked Drop** — holes send the ball *through* the desk
+    almost instantly, keeping its momentum, onto the phone below. The
+    lower phone can simply rest face up (within ~30° of level); tipped
+    over or face down misses and the ball returns to the thrower. The
+    landing spot is mapped in physical points from the screen center (so
+    an SE above a 16 Pro lines up), nudged clear of the lower course's
+    own holes, with a brief grace period so the ball can't fall straight
+    back down forever.
 - ✅ **Localization** — follows the device language like any international
   app: Japanese devices get Japanese, everything else falls back to
   English (App Store country doesn't matter; iOS apps read the phone's

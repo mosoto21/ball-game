@@ -147,9 +147,18 @@ final class GameScene: SKScene {
     private let multipeer = MultipeerManager()
     /// Holds the wall physics; side walls open while a peer is connected.
     private let wallsNode = SKNode()
-    /// Chosen on the menu screen: whether this session looks for a second
-    /// phone. Solo play never advertises or browses.
-    private var multiplayerEnabled = false
+    /// How this session is played, chosen on the menu. Phones can't sense
+    /// their real arrangement without UWB, so the players declare it:
+    /// side-by-side opens the side walls for edge passing and keeps holes
+    /// as normal traps; stacked closes the walls and drops the ball
+    /// through holes to the phone placed underneath (resting is fine —
+    /// it just has to be face up).
+    enum PlayMode {
+        case solo, sideBySide, stacked
+    }
+
+    private var playMode = PlayMode.solo
+    private var multiplayerEnabled: Bool { playMode != .solo }
     private var peerConnected = false
     /// False while the ball is visiting the other phone.
     private var ballIsHere = true
@@ -159,25 +168,17 @@ final class GameScene: SKScene {
     /// True briefly after catching a dropped ball; holes don't swallow the
     /// ball while set (see catchGraceDuration).
     private var isDropGrace = false
-    /// Rolling record of recent frames that showed hand-tremor motion. A
-    /// phone resting on the desk is dead still; a phone held in a hand
-    /// always jitters a little. This is the "underneath" check without UWB:
-    /// a catch requires the phone to actually be held, so a phone lying
-    /// beside the thrower on the desk can't magically catch the ball.
-    private var handheldHistory: [Bool] = []
-    private var isHandHeld: Bool {
-        handheldHistory.lazy.filter { $0 }.count >= GameScene.handheldMinSamples
-    }
 
-    /// Called from the menu when a mode is picked (or when returning to the
-    /// menu, with `false`, which also drops any live connection).
-    func setMultiplayer(_ enabled: Bool) {
-        multiplayerEnabled = enabled
-        if enabled {
+    /// Called from the menu when a mode is picked (or when returning to
+    /// the menu, with `.solo`, which also drops any live connection).
+    func setPlayMode(_ mode: PlayMode) {
+        playMode = mode
+        if multiplayerEnabled {
             multipeer.start()
         } else {
             multipeer.stop()
         }
+        rebuildWalls()
         updateConnectionLabel()
     }
     private let connectionLabel = SKLabelNode()
@@ -190,7 +191,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 31
+    private static let buildNumber = 32
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -228,17 +229,6 @@ final class GameScene: SKScene {
     /// the twin of the hole it just fell through — without a grace period
     /// it would fall forever between the two phones.
     private static let catchGraceDuration: TimeInterval = 0.8
-    /// Hand-tremor window: how many recent frames to remember (~1.2 s at
-    /// 60 fps) and how many of them must show motion for the phone to count
-    /// as held in a hand. Desk-resting noise stays near zero; the brief
-    /// buzz of the thrower's haptic traveling through the desk is far
-    /// shorter than the required sample count.
-    private static let handheldWindow = 72
-    private static let handheldMinSamples = 10
-    /// Per-frame motion thresholds that count as tremor: user acceleration
-    /// in G (gravity removed) and rotation rate in rad/s.
-    private static let handheldAccelThreshold = 0.02
-    private static let handheldRotationThreshold = 0.05
     /// How level the catching phone must be at the moment of landing.
     /// Gravity along the screen normal is -1 G when perfectly face up.
     /// Strict (within ~30° of flat): the normal steering grip is tilted
@@ -340,8 +330,10 @@ final class GameScene: SKScene {
         followBallWithCamera()
     }
 
-    /// Solo play keeps a full wall loop; with a peer connected the left and
-    /// right walls open so the ball can roll off to the neighboring phone.
+    /// A full wall loop normally; in side-by-side play with a peer
+    /// connected the left and right walls open so the ball can roll off to
+    /// the neighboring phone. Stacked play keeps the loop closed — the
+    /// ball leaves through holes, not edges.
     private func rebuildWalls() {
         wallsNode.removeAllChildren()
 
@@ -352,7 +344,7 @@ final class GameScene: SKScene {
             wallsNode.addChild(node)
         }
 
-        if peerConnected {
+        if peerConnected, playMode == .sideBySide {
             addWall(SKPhysicsBody(
                 edgeFrom: CGPoint(x: worldRect.minX, y: worldRect.minY),
                 to: CGPoint(x: worldRect.maxX, y: worldRect.minY)
@@ -734,19 +726,6 @@ final class GameScene: SKScene {
 
         guard let body = ball.physicsBody else { return }
 
-        // Sample hand tremor every frame (even while the ball is on the
-        // other phone) so a drop can check whether this phone is held.
-        if let deviceMotion = motion.deviceMotion {
-            let accel = deviceMotion.userAcceleration
-            let rotation = deviceMotion.rotationRate
-            let moving =
-                hypot(hypot(accel.x, accel.y), accel.z) > GameScene.handheldAccelThreshold
-                || hypot(hypot(rotation.x, rotation.y), rotation.z) > GameScene.handheldRotationThreshold
-            handheldHistory.append(moving)
-            if handheldHistory.count > GameScene.handheldWindow {
-                handheldHistory.removeFirst(handheldHistory.count - GameScene.handheldWindow)
-            }
-        }
 
         // Track the connection: open/close the side walls and, if the peer
         // vanished while holding the ball, bring it home.
@@ -781,7 +760,7 @@ final class GameScene: SKScene {
         shadow.position = CGPoint(x: ball.position.x, y: ball.position.y - 4)
 
         // The ball rolled past an open side edge: hand it to the other phone.
-        if peerConnected, !isFalling, !isTransitioning,
+        if peerConnected, playMode == .sideBySide, !isFalling, !isTransitioning,
            ball.position.x < worldRect.minX - GameScene.ballRadius
             || ball.position.x > worldRect.maxX + GameScene.ballRadius {
             sendBallToPeer()
@@ -982,11 +961,11 @@ final class GameScene: SKScene {
 
     // MARK: - Falling & winning
 
-    /// The ball rolled over a trap. Playing solo it's swallowed and the
-    /// level restarts; with a peer connected it falls *through* the desk
-    /// toward the phone held underneath (Milestone 4).
+    /// The ball rolled over a trap. In stacked play with a peer connected
+    /// it falls *through* the desk toward the phone underneath (Milestone
+    /// 4); everywhere else it's swallowed and the level restarts.
     private func fall(into hole: SKSpriteNode) {
-        if peerConnected {
+        if peerConnected, playMode == .stacked {
             dropBallToPeer(through: hole)
         } else {
             swallowAndRespawn(into: hole)
@@ -1198,23 +1177,19 @@ final class GameScene: SKScene {
         return point
     }
 
-    /// The falling ball reached this phone's plane. It's a catch only when
-    /// this phone is actually held in a hand (a phone resting on the desk
-    /// beside the thrower can't be underneath) AND held flat like a tray;
-    /// otherwise the ball whiffs past and the thrower gets it back.
+    /// The falling ball reached this phone's plane. In stacked play the
+    /// players have physically placed this phone underneath, so the only
+    /// requirement is that it's face up (resting on a surface is fine);
+    /// tipped over or face down, the ball whiffs past and the thrower
+    /// gets it back.
     private func resolveDropLanding(at point: CGPoint, velocity: CGVector) {
         let gravityZ = motion.deviceMotion?.gravity.z ?? -1
-        let isLevel = gravityZ < GameScene.catchLevelThreshold
-        let held = isHandHeld
-        let caught = isLevel && held
+        let caught = gravityZ < GameScene.catchLevelThreshold
         multipeer.send(.dropResult(caught: caught))
 
         guard caught else {
             fallHaptic.impactOccurred()
-            showToast(held
-                ? L10n.t("ミス！水平にかまえて！", "Miss! Hold your phone flat!")
-                : L10n.t("ミス！手に持って下でかまえて！",
-                         "Miss! Hold your phone in your hand underneath!"))
+            showToast(L10n.t("ミス！画面を上に向けて！", "Miss! Keep the screen facing up!"))
             return
         }
 
