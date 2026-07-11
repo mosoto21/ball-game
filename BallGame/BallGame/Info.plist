@@ -4,6 +4,8 @@
 <dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Used to pass the ball to a nearby iPhone. / 近くの iPhone とボールをやり取りするために使います。</string>
+	<key>NSNearbyInteractionUsageDescription</key>
+	<string>Used to sense whether the other iPhone is beside or below yours, so the ball can fall through holes onto it. / 相手の iPhone が横にあるか下にあるかを検出し、穴からボールを落とすために使います。</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_kkk-ball._tcp</string>

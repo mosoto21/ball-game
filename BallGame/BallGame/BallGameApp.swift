@@ -99,8 +99,8 @@ struct GameView: View {
     }
 }
 
-/// The title screen: play alone, or declare how the two phones are
-/// physically arranged (they can't sense it themselves).
+/// The title screen: play alone or together — in multiplayer the phones
+/// sense their physical arrangement themselves over UWB.
 struct MenuView: View {
     let onSelect: (GameScene.PlayMode) -> Void
     @AppStorage("ballColor") private var ballColor = 0
@@ -147,18 +147,11 @@ struct MenuView: View {
                     ) { onSelect(.solo) }
 
                     modeButton(
-                        title: L10n.t("よこにならべてあそぶ", "Side by Side"),
-                        subtitle: L10n.t("2台を横にならべて、はしからはしへパス",
-                                          "Two iPhones next to each other — pass across the edges"),
-                        icon: "rectangle.split.2x1"
-                    ) { onSelect(.sideBySide) }
-
-                    modeButton(
-                        title: L10n.t("うえしたであそぶ", "Stacked Drop"),
-                        subtitle: L10n.t("穴に落ちたボールが下のiPhoneへ！\n下のiPhoneは画面を上に向けて置いて待とう",
-                                          "A ball in a hole drops to the iPhone below!\nLeave the lower iPhone face up and wait"),
-                        icon: "square.stack"
-                    ) { onSelect(.stacked) }
+                        title: L10n.t("ふたりであそぶ", "Play Together"),
+                        subtitle: L10n.t("近くのiPhoneと自動でつながる\nよこにならべると はしからパス\nうえにかさねると 穴からボールが落ちてくる",
+                                          "Auto-connects to a nearby iPhone\nSide by side: pass across the edges\nStacked: the ball drops through holes"),
+                        icon: "person.2.fill"
+                    ) { onSelect(.multiplayer) }
                 }
                 .padding(.horizontal, 32)
             }

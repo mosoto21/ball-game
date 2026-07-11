@@ -2,6 +2,8 @@ import SpriteKit
 import CoreMotion
 import UIKit
 import MultipeerConnectivity
+import NearbyInteraction
+import simd
 
 /// Device-language localization, the way international apps behave: a
 /// phone set to Japanese shows Japanese, every other language falls back
@@ -147,19 +149,45 @@ final class GameScene: SKScene {
     private let multipeer = MultipeerManager()
     /// Holds the wall physics; side walls open while a peer is connected.
     private let wallsNode = SKNode()
-    /// How this session is played, chosen on the menu. Phones can't sense
-    /// their real arrangement without UWB, so the players declare it:
-    /// side-by-side opens the side walls for edge passing and keeps holes
-    /// as normal traps; stacked closes the walls and drops the ball
-    /// through holes to the phone placed underneath (resting is fine —
-    /// it just has to be face up).
+    /// How this session is played, chosen on the menu. In multiplayer the
+    /// physical arrangement is sensed live over UWB: side by side the ball
+    /// passes across the open edges, stacked it drops through holes to the
+    /// phone below. (Devices without UWB fall back to side-by-side play.)
     enum PlayMode {
-        case solo, sideBySide, stacked
+        case solo, multiplayer
+    }
+
+    /// Where the other phone physically sits right now, from UWB direction
+    /// crossed with gravity.
+    enum PeerPlacement {
+        case unknown, beside, below, above
     }
 
     private var playMode = PlayMode.solo
     private var multiplayerEnabled: Bool { playMode != .solo }
     private var peerConnected = false
+    /// UWB ranging against the connected peer.
+    private let nearby = NearbyPlacementManager()
+    /// Placement shown in the HUD; refreshed when the classification flips.
+    private var lastPlacement = PeerPlacement.unknown
+    /// Whether the side walls are currently open for edge passing.
+    private var sidePassOpen = false
+
+    /// Classify the peer's position: the UWB direction vector and gravity
+    /// both live in device coordinates, so their dot product says how far
+    /// the peer sits toward "straight down" regardless of how this phone
+    /// is being held.
+    private var peerPlacement: PeerPlacement {
+        guard let direction = nearby.direction,
+              let gravity = motion.deviceMotion?.gravity else { return .unknown }
+        let down = simd_normalize(simd_float3(Float(gravity.x),
+                                              Float(gravity.y),
+                                              Float(gravity.z)))
+        let dot = simd_dot(direction, down)
+        if dot > 0.6 { return .below }
+        if dot < -0.6 { return .above }
+        return .beside
+    }
     /// False while the ball is visiting the other phone.
     private var ballIsHere = true
     /// True after dropping the ball through a hole, until the peer reports
@@ -177,7 +205,12 @@ final class GameScene: SKScene {
             multipeer.start()
         } else {
             multipeer.stop()
+            nearby.stop()
         }
+        // The update loop isn't running while the menu is up; reset the
+        // arrangement state here so walls start closed until UWB speaks.
+        sidePassOpen = false
+        lastPlacement = .unknown
         rebuildWalls()
         updateConnectionLabel()
     }
@@ -191,7 +224,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 32
+    private static let buildNumber = 33
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -229,6 +262,10 @@ final class GameScene: SKScene {
     /// the twin of the hole it just fell through — without a grace period
     /// it would fall forever between the two phones.
     private static let catchGraceDuration: TimeInterval = 0.8
+    /// A drop only fires when UWB puts the peer below AND within arm's
+    /// reach — a phone one floor down is below too, but no one catches
+    /// through a ceiling.
+    private static let maxDropDistance: Float = 0.7
     /// How level the catching phone must be at the moment of landing.
     /// Gravity along the screen normal is -1 G when perfectly face up.
     /// Strict (within ~30° of flat): the normal steering grip is tilted
@@ -262,7 +299,11 @@ final class GameScene: SKScene {
             case .sideTransfer(let transfer): self?.receiveBall(transfer)
             case .drop(let drop): self?.receiveFallingBall(drop)
             case .dropResult(let caught): self?.handleDropResult(caught: caught)
+            case .uwbToken(let data): self?.nearby.receivePeerToken(data)
             }
+        }
+        nearby.onTokenReady = { [weak self] data in
+            self?.multipeer.send(.uwbToken(data))
         }
         if multiplayerEnabled {
             multipeer.start()
@@ -330,10 +371,10 @@ final class GameScene: SKScene {
         followBallWithCamera()
     }
 
-    /// A full wall loop normally; in side-by-side play with a peer
-    /// connected the left and right walls open so the ball can roll off to
-    /// the neighboring phone. Stacked play keeps the loop closed — the
-    /// ball leaves through holes, not edges.
+    /// A full wall loop normally; with a peer connected side by side the
+    /// left and right walls open so the ball can roll off to the
+    /// neighboring phone. Stacked phones keep the loop closed — the ball
+    /// leaves through holes, not edges.
     private func rebuildWalls() {
         wallsNode.removeAllChildren()
 
@@ -344,7 +385,7 @@ final class GameScene: SKScene {
             wallsNode.addChild(node)
         }
 
-        if peerConnected, playMode == .sideBySide {
+        if sidePassOpen {
             addWall(SKPhysicsBody(
                 edgeFrom: CGPoint(x: worldRect.minX, y: worldRect.minY),
                 to: CGPoint(x: worldRect.maxX, y: worldRect.minY)
@@ -537,11 +578,25 @@ final class GameScene: SKScene {
             return
         }
         if peerConnected {
-            connectionLabel.text = "● \(multipeer.connectedPeerName ?? L10n.t("つながった", "Connected"))"
+            let name = multipeer.connectedPeerName ?? L10n.t("つながった", "Connected")
+            connectionLabel.text = "● \(name)\(placementSuffix())"
             connectionLabel.fontColor = SKColor(red: 0.15, green: 0.6, blue: 0.25, alpha: 0.9)
         } else {
             connectionLabel.text = L10n.t("○ 相手をさがしています…", "○ Looking for a nearby iPhone…")
             connectionLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.5)
+        }
+    }
+
+    /// Live arrangement readout so players can see what UWB thinks.
+    private func placementSuffix() -> String {
+        guard NearbyPlacementManager.isSupported else {
+            return L10n.t("（UWBなし・よこパスのみ）", " (no UWB: side pass only)")
+        }
+        switch lastPlacement {
+        case .below: return L10n.t(" ↓ したにいる", " ↓ below you")
+        case .above: return L10n.t(" ↑ うえにいる", " ↑ above you")
+        case .beside: return L10n.t(" ↔ よこにいる", " ↔ beside you")
+        case .unknown: return ""
         }
     }
 
@@ -727,11 +782,15 @@ final class GameScene: SKScene {
         guard let body = ball.physicsBody else { return }
 
 
-        // Track the connection: open/close the side walls and, if the peer
+        // Track the connection: start/stop UWB ranging and, if the peer
         // vanished while holding the ball, bring it home.
         if multipeer.isConnected != peerConnected {
             peerConnected = multipeer.isConnected
-            rebuildWalls()
+            if peerConnected {
+                nearby.prepare()
+            } else {
+                nearby.stop()
+            }
             updateConnectionLabel()
             if !peerConnected, !ballIsHere {
                 ballIsHere = true
@@ -743,6 +802,20 @@ final class GameScene: SKScene {
                 ball.position = startPosition
                 body.velocity = .zero
             }
+        }
+
+        // The arrangement is live: follow it frame to frame. Side passing
+        // opens the walls unless UWB says the phones are stacked.
+        let placement = peerPlacement
+        if placement != lastPlacement {
+            lastPlacement = placement
+            updateConnectionLabel()
+        }
+        let wantSidePass = peerConnected
+            && placement != .below && placement != .above
+        if wantSidePass != sidePassOpen {
+            sidePassOpen = wantSidePass
+            rebuildWalls()
         }
 
         guard ballIsHere else { return }
@@ -760,7 +833,7 @@ final class GameScene: SKScene {
         shadow.position = CGPoint(x: ball.position.x, y: ball.position.y - 4)
 
         // The ball rolled past an open side edge: hand it to the other phone.
-        if peerConnected, playMode == .sideBySide, !isFalling, !isTransitioning,
+        if sidePassOpen, !isFalling, !isTransitioning,
            ball.position.x < worldRect.minX - GameScene.ballRadius
             || ball.position.x > worldRect.maxX + GameScene.ballRadius {
             sendBallToPeer()
@@ -961,11 +1034,13 @@ final class GameScene: SKScene {
 
     // MARK: - Falling & winning
 
-    /// The ball rolled over a trap. In stacked play with a peer connected
-    /// it falls *through* the desk toward the phone underneath (Milestone
-    /// 4); everywhere else it's swallowed and the level restarts.
+    /// The ball rolled over a trap. When UWB says the other phone is
+    /// physically below this one right now, the ball falls *through* the
+    /// desk toward it (Milestone 4); everywhere else it's swallowed and
+    /// the level restarts.
     private func fall(into hole: SKSpriteNode) {
-        if peerConnected, playMode == .stacked {
+        if peerConnected, peerPlacement == .below,
+           nearby.distance ?? 0 < GameScene.maxDropDistance {
             dropBallToPeer(through: hole)
         } else {
             swallowAndRespawn(into: hole)
@@ -1862,6 +1937,101 @@ final class GameScene: SKScene {
     }
 }
 
+// MARK: - UWB placement sensing (Nearby Interaction)
+
+/// Measures the real physical arrangement of the two phones with the UWB
+/// chip: distance in meters plus — while the peer sits inside the antenna's
+/// field of view (a cone around the rear camera's axis) — a direction
+/// vector in device coordinates (+x right, +y top of phone, +z out of the
+/// screen). Discovery tokens travel over the existing Multipeer link.
+final class NearbyPlacementManager: NSObject, NISessionDelegate {
+    private var session: NISession?
+    /// Kept so ranging can restart after timeouts and suspensions.
+    private var peerToken: NIDiscoveryToken?
+    /// False after stop(); blocks delegate-driven resurrection.
+    private var shouldRun = false
+
+    private(set) var distance: Float?
+    private(set) var direction: simd_float3?
+
+    /// Ships a freshly minted local discovery token to the peer.
+    var onTokenReady: ((Data) -> Void)?
+
+    static var isSupported: Bool {
+        NISession.deviceCapabilities.supportsPreciseDistanceMeasurement
+    }
+
+    /// Create the session and publish our token. Safe to call repeatedly.
+    func prepare() {
+        guard NearbyPlacementManager.isSupported, session == nil else { return }
+        shouldRun = true
+        let session = NISession()
+        session.delegate = self
+        self.session = session
+        if let token = session.discoveryToken,
+           let data = try? NSKeyedArchiver.archivedData(withRootObject: token,
+                                                        requiringSecureCoding: true) {
+            onTokenReady?(data)
+        }
+    }
+
+    /// The peer's token arrived: start (or restart) ranging against it.
+    func receivePeerToken(_ data: Data) {
+        prepare() // in case the token beat our own connection bookkeeping
+        guard let session,
+              let token = try? NSKeyedUnarchiver.unarchivedObject(
+                ofClass: NIDiscoveryToken.self, from: data) else { return }
+        peerToken = token
+        session.run(NINearbyPeerConfiguration(peerToken: token))
+    }
+
+    func stop() {
+        shouldRun = false
+        session?.invalidate()
+        session = nil
+        peerToken = nil
+        distance = nil
+        direction = nil
+    }
+
+    // MARK: NISessionDelegate (delivered on the main queue)
+
+    func session(_ session: NISession, didUpdate nearbyObjects: [NINearbyObject]) {
+        guard let object = nearbyObjects.first else { return }
+        if let measured = object.distance { distance = measured }
+        direction = object.direction // nil while out of the antenna's FoV
+    }
+
+    func session(_ session: NISession, didRemove nearbyObjects: [NINearbyObject],
+                 reason: NINearbyObject.RemovalReason) {
+        distance = nil
+        direction = nil
+        // Peer timed out (screen off, out of range): keep listening.
+        if shouldRun, let peerToken {
+            session.run(NINearbyPeerConfiguration(peerToken: peerToken))
+        }
+    }
+
+    func sessionSuspensionEnded(_ session: NISession) {
+        if shouldRun, let peerToken {
+            session.run(NINearbyPeerConfiguration(peerToken: peerToken))
+        }
+    }
+
+    func session(_ session: NISession, didInvalidateWith error: Error) {
+        self.session = nil
+        distance = nil
+        direction = nil
+        guard shouldRun else { return }
+        // Tokens die with their session: mint a new one, resend it, and
+        // resume against the peer's (still valid) token.
+        prepare()
+        if let peerToken {
+            self.session?.run(NINearbyPeerConfiguration(peerToken: peerToken))
+        }
+    }
+}
+
 // MARK: - Phone-to-phone ball transfer (Milestones 3 & 4)
 
 /// Everything that can travel between the two phones.
@@ -1872,6 +2042,9 @@ enum PeerMessage: Codable {
     case drop(BallDrop)
     /// Whether the phone underneath caught the dropped ball.
     case dropResult(caught: Bool)
+    /// An NIDiscoveryToken (archived) so the two phones can range each
+    /// other over UWB and learn their physical arrangement.
+    case uwbToken(Data)
 }
 
 /// Everything the ball carries when it rolls to the neighboring phone.

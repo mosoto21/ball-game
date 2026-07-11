@@ -15,19 +15,22 @@ and catch it when it falls through a hole. Full concept in
   hopping over trap holes; falling restarts the level.
 - ✅ **Milestone 3** — ball rolls between two phones placed side by side.
 - ✅ **Milestone 4** — catch the falling ball with a phone underneath.
-  Phones can't sense their physical arrangement (no UWB on the SE), so
-  the menu asks how you're playing:
-  - **よこにならべて / Side by Side** — the side walls open and the ball
-    rolls across the edges; holes stay normal traps, nothing ever drops
-    "down" to a phone that's actually beside you.
-  - **うえした / Stacked Drop** — holes send the ball *through* the desk
-    almost instantly, keeping its momentum, onto the phone below. The
-    lower phone can simply rest face up (within ~30° of level); tipped
-    over or face down misses and the ball returns to the thrower. The
-    landing spot is mapped in physical points from the screen center (so
-    an SE above a 16 Pro lines up), nudged clear of the lower course's
-    own holes, with a brief grace period so the ball can't fall straight
-    back down forever.
+  The two phones sense their real physical arrangement over **UWB**
+  (Nearby Interaction; requires two UWB iPhones — iPhone 11 or later,
+  not SE/16e), exchanging discovery tokens over the Multipeer link and
+  crossing the measured direction with gravity:
+  - **Side by side** (or arrangement unknown) — the side walls open and
+    the ball rolls across the edges; holes stay normal traps, nothing
+    ever drops "down" to a phone that's actually beside you.
+  - **Stacked** (UWB says the peer is below, within 0.7 m) — holes send
+    the ball *through* the desk almost instantly, keeping its momentum,
+    onto the phone below. The lower phone can simply rest face up
+    (within ~30° of level); tipped over or face down misses and the ball
+    returns to the thrower. The landing spot is mapped in physical points
+    from the screen center, nudged clear of the lower course's own holes,
+    with a brief grace period so the ball can't fall straight back down.
+  The HUD shows what UWB sees live (↓ below / ↑ above / ↔ beside).
+  Without UWB on both phones the game plays side-by-side only.
 - ✅ **Localization** — follows the device language like any international
   app: Japanese devices get Japanese, everything else falls back to
   English (App Store country doesn't matter; iOS apps read the phone's
