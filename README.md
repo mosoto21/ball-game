@@ -14,7 +14,11 @@ and catch it when it falls through a hole. Full concept in
   the glowing goal hole past pencils, erasers, dominoes and coin bumpers,
   hopping over trap holes; falling restarts the level.
 - ⬜ Milestone 3 — ball rolls between two phones placed side by side
-- ⬜ Milestone 4 — catch the falling ball with a phone held underneath
+- ✅ **Milestone 4** — catch the falling ball with a phone held underneath:
+  with two phones connected, a ball that drops into a hole falls *through*
+  the desk. On the other phone a shadow swells at the same spot on screen —
+  hold that phone level (face up) underneath and the ball lands with a
+  bounce; tilt it away and the ball whiffs past and returns to the thrower.
 
 ## How to run it on your iPhone
 

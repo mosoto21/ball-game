@@ -141,6 +141,9 @@ final class GameScene: SKScene {
     private var peerConnected = false
     /// False while the ball is visiting the other phone.
     private var ballIsHere = true
+    /// True after dropping the ball through a hole, until the peer reports
+    /// whether the catch underneath succeeded.
+    private var awaitingDropResult = false
     private let connectionLabel = SKLabelNode()
     /// The style the ball is currently wearing. Travels with the ball, so a
     /// visiting ball keeps its owner's design.
@@ -151,7 +154,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 26
+    private static let buildNumber = 27
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -180,6 +183,14 @@ final class GameScene: SKScene {
     private static let hopCooldown: TimeInterval = 1.0
     /// Radius of a hole in the floor.
     private static let holeRadius: CGFloat = 34
+    /// Time a dropped ball spends falling through the air between phones —
+    /// long enough for the catcher to slide their phone underneath.
+    private static let dropFallDuration: TimeInterval = 1.5
+    /// How level the catching phone must be at the moment of landing.
+    /// Gravity along the screen normal is -1 G when perfectly face up.
+    private static let catchLevelThreshold: Double = -0.75
+    /// Give up on a drop and respawn if the peer never reports a result.
+    private static let dropResultTimeout: TimeInterval = 4.0
     /// Grid spacing of the dots on the ball's surface.
     private static let dotSpacing: CGFloat = 19
 
@@ -199,8 +210,12 @@ final class GameScene: SKScene {
         buildBallIfNeeded()
         loadLevel(levelIndex)
 
-        multipeer.onBallReceived = { [weak self] transfer in
-            self?.receiveBall(transfer)
+        multipeer.onMessage = { [weak self] message in
+            switch message {
+            case .sideTransfer(let transfer): self?.receiveBall(transfer)
+            case .drop(let drop): self?.receiveFallingBall(drop)
+            case .dropResult(let caught): self?.handleDropResult(caught: caught)
+            }
         }
         multipeer.start()
     }
@@ -215,6 +230,7 @@ final class GameScene: SKScene {
         isAirborne = false
         isFalling = false
         isTransitioning = false
+        awaitingDropResult = false
         lastUpdateTime = nil
 
         let level = GameScene.levels[index]
@@ -662,6 +678,9 @@ final class GameScene: SKScene {
             updateConnectionLabel()
             if !peerConnected, !ballIsHere {
                 ballIsHere = true
+                isFalling = false
+                awaitingDropResult = false
+                removeAction(forKey: "dropTimeout")
                 ball.isHidden = false
                 shadow.isHidden = false
                 ball.position = startPosition
@@ -884,8 +903,19 @@ final class GameScene: SKScene {
 
     // MARK: - Falling & winning
 
-    /// The ball rolled over a trap: suck it in, then restart the level.
+    /// The ball rolled over a trap. Playing solo it's swallowed and the
+    /// level restarts; with a peer connected it falls *through* the desk
+    /// toward the phone held underneath (Milestone 4).
     private func fall(into hole: SKSpriteNode) {
+        if peerConnected {
+            dropBallToPeer(through: hole)
+        } else {
+            swallowAndRespawn(into: hole)
+        }
+    }
+
+    /// Solo fall: suck the ball in, then restart the level.
+    private func swallowAndRespawn(into hole: SKSpriteNode) {
         isFalling = true
         fallHaptic.impactOccurred()
         ball.physicsBody?.velocity = .zero
@@ -912,6 +942,211 @@ final class GameScene: SKScene {
         ball.run(.sequence([suck, .wait(forDuration: 0.6), respawn]))
     }
 
+    // MARK: - Vertical drop between phones (Milestone 4)
+
+    /// The ball fell through a hole with a peer connected: it keeps falling
+    /// through real space toward the phone held underneath. Ship it to the
+    /// peer and wait to hear whether they caught it.
+    private func dropBallToPeer(through hole: SKSpriteNode) {
+        isFalling = true
+        awaitingDropResult = true
+        fallHaptic.impactOccurred()
+        ball.physicsBody?.velocity = .zero
+
+        // Send the hole's spot as a fraction of the visible screen: the
+        // catching phone sits physically underneath, so the same spot on its
+        // screen is where the ball should land.
+        let drop = BallDrop(
+            xScreenFraction: Double((hole.position.x - cameraNode.position.x) / size.width + 0.5),
+            yScreenFraction: Double((hole.position.y - cameraNode.position.y) / size.height + 0.5),
+            colorIndex: displayedColorIndex,
+            patternIndex: displayedPatternIndex,
+            skinPNG: displayedPatternIndex == BallPattern.custom.rawValue
+                ? displayedSkinData : nil
+        )
+        multipeer.send(.drop(drop))
+
+        let suck = SKAction.group([
+            .move(to: hole.position, duration: 0.12),
+            .scale(to: 0.08, duration: 0.3),
+            .fadeOut(withDuration: 0.3),
+        ])
+        suck.timingMode = .easeIn
+        shadow.run(.fadeOut(withDuration: 0.2))
+        ball.run(.sequence([suck, .run { [weak self] in
+            self?.ball.isHidden = true
+            self?.ballIsHere = false
+        }]))
+
+        showToast("下のスマホでキャッチ！")
+
+        // If the peer never answers (disconnected mid-fall), bring it home.
+        run(.sequence([
+            .wait(forDuration: GameScene.dropResultTimeout),
+            .run { [weak self] in
+                guard let self, self.awaitingDropResult else { return }
+                self.awaitingDropResult = false
+                self.respawnBall()
+            },
+        ]), withKey: "dropTimeout")
+    }
+
+    /// The peer reported whether the ball dropped from here was caught.
+    private func handleDropResult(caught: Bool) {
+        guard awaitingDropResult else { return }
+        awaitingDropResult = false
+        removeAction(forKey: "dropTimeout")
+
+        if caught {
+            // The ball lives on the other phone now.
+            isFalling = false
+            showToast("ナイスキャッチ！")
+        } else {
+            showToast("キャッチミス！ボールがもどってきた")
+            respawnBall()
+        }
+    }
+
+    /// Bring the ball back to the start after a missed drop or a timeout.
+    private func respawnBall() {
+        ballIsHere = true
+        ball.removeAllActions()
+        ball.isHidden = false
+        ball.alpha = 0
+        ball.setScale(0.3)
+        ball.position = startPosition
+        ball.physicsBody?.velocity = .zero
+        ball.run(.group([
+            .scale(to: 1.0, duration: 0.25),
+            .fadeIn(withDuration: 0.2),
+        ])) { self.isFalling = false }
+        shadow.removeAllActions()
+        shadow.isHidden = false
+        shadow.run(.fadeIn(withDuration: 0.2))
+    }
+
+    /// A ball is falling from the phone held above: its shadow swells on the
+    /// floor and, if this phone is held level when it arrives, the ball
+    /// lands here and play continues on this screen.
+    private func receiveFallingBall(_ drop: BallDrop) {
+        // The incoming ball replaces whatever this screen was doing.
+        ball.removeAllActions()
+        shadow.removeAllActions()
+        removeAction(forKey: "dropTimeout")
+        isFalling = false
+        isAirborne = false
+        awaitingDropResult = false
+        ballIsHere = false
+        ball.isHidden = true
+        shadow.isHidden = true
+        ball.physicsBody?.velocity = .zero
+
+        displayedColorIndex = drop.colorIndex
+        displayedPatternIndex = drop.patternIndex
+        displayedSkinData = drop.skinPNG
+        applyDisplayedStyle()
+
+        // Map the sender's screen spot onto the part of the world this
+        // camera is showing — stacked phones share the same physical spot.
+        let landing = CGPoint(
+            x: cameraNode.position.x + (CGFloat(drop.xScreenFraction) - 0.5) * size.width,
+            y: cameraNode.position.y + (CGFloat(drop.yScreenFraction) - 0.5) * size.height
+        )
+        let clamped = CGPoint(
+            x: min(max(landing.x, worldRect.minX + GameScene.ballRadius),
+                   worldRect.maxX - GameScene.ballRadius),
+            y: min(max(landing.y, worldRect.minY + GameScene.ballRadius),
+                   worldRect.maxY - GameScene.ballRadius)
+        )
+
+        showToast("ボールが落ちてくる！水平にかまえて！")
+        landingHaptic.prepare()
+
+        // The ball closing in from above, seen as its growing shadow.
+        let dropShadow = SKSpriteNode(
+            texture: GameScene.softShadowTexture(radius: GameScene.ballRadius))
+        dropShadow.position = clamped
+        dropShadow.zPosition = 5
+        dropShadow.setScale(0.2)
+        dropShadow.alpha = 0.2
+        addChild(dropShadow)
+
+        let swell = SKAction.group([
+            .scale(to: 1.35, duration: GameScene.dropFallDuration),
+            .fadeAlpha(to: 1.0, duration: GameScene.dropFallDuration),
+        ])
+        swell.timingMode = .easeIn
+        dropShadow.run(.sequence([
+            swell,
+            .run { [weak self] in self?.resolveDropLanding(at: clamped) },
+            .removeFromParent(),
+        ]))
+    }
+
+    /// The falling ball reached this phone's plane. Held level, it's a
+    /// catch and the ball bounces in; tilted away, it whiffs past and the
+    /// thrower gets it back.
+    private func resolveDropLanding(at point: CGPoint) {
+        let gravityZ = motion.deviceMotion?.gravity.z ?? -1
+        let caught = gravityZ < GameScene.catchLevelThreshold
+        multipeer.send(.dropResult(caught: caught))
+
+        guard caught else {
+            fallHaptic.impactOccurred()
+            showToast("ミス！ボールは上にもどった")
+            return
+        }
+
+        ballIsHere = true
+        ball.isHidden = false
+        ball.alpha = 1
+        ball.position = point
+        // Arrives from above: starts big (close to the viewer) and settles.
+        ball.setScale(1.6)
+        ball.physicsBody?.velocity = .zero
+        shadow.isHidden = false
+        shadow.alpha = 1
+        shadow.setScale(1)
+        shadow.position = point
+
+        let settle = SKAction.scale(to: 1.0, duration: 0.18)
+        settle.timingMode = .easeIn
+        let squash = SKAction.sequence([
+            .scaleX(to: 1.22, y: 0.78, duration: 0.07),
+            .scaleX(to: 0.94, y: 1.06, duration: 0.08),
+            .scaleX(to: 1.0, y: 1.0, duration: 0.07),
+        ])
+        ball.run(.sequence([
+            settle,
+            .run { [weak self] in self?.didLand() },
+            squash,
+        ]))
+        showToast("ナイスキャッチ！")
+    }
+
+    /// A short message that pops in under the level label and fades away.
+    private func showToast(_ text: String) {
+        cameraNode.childNode(withName: "toast")?.removeFromParent()
+        let label = SKLabelNode(text: text)
+        label.name = "toast"
+        label.fontName = "AvenirNext-Bold"
+        label.fontSize = 17
+        label.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.9)
+        label.position = CGPoint(x: 0, y: size.height / 2 - 100)
+        label.zPosition = 100
+        label.setScale(0.5)
+        cameraNode.addChild(label)
+
+        let pop = SKAction.scale(to: 1.0, duration: 0.15)
+        pop.timingMode = .easeOut
+        label.run(.sequence([
+            pop,
+            .wait(forDuration: 1.6),
+            .fadeOut(withDuration: 0.3),
+            .removeFromParent(),
+        ]))
+    }
+
     // MARK: - Ball transfer between phones
 
     /// The ball left through an open side edge: ship its motion and style to
@@ -929,7 +1164,7 @@ final class GameScene: SKScene {
             skinPNG: displayedPatternIndex == BallPattern.custom.rawValue
                 ? displayedSkinData : nil
         )
-        multipeer.send(transfer)
+        multipeer.send(.sideTransfer(transfer))
 
         ballIsHere = false
         ball.isHidden = true
@@ -948,6 +1183,8 @@ final class GameScene: SKScene {
         ballIsHere = true
         isFalling = false
         isAirborne = false
+        awaitingDropResult = false
+        removeAction(forKey: "dropTimeout")
         ball.removeAllActions()
         shadow.removeAllActions()
         ball.setScale(1)
@@ -1522,9 +1759,19 @@ final class GameScene: SKScene {
     }
 }
 
-// MARK: - Phone-to-phone ball transfer (Milestone 3)
+// MARK: - Phone-to-phone ball transfer (Milestones 3 & 4)
 
-/// Everything the ball carries when it hops to the neighboring phone.
+/// Everything that can travel between the two phones.
+enum PeerMessage: Codable {
+    /// The ball rolled off a side edge onto the neighboring phone.
+    case sideTransfer(BallTransfer)
+    /// The ball fell through a hole toward the phone held underneath.
+    case drop(BallDrop)
+    /// Whether the phone underneath caught the dropped ball.
+    case dropResult(caught: Bool)
+}
+
+/// Everything the ball carries when it rolls to the neighboring phone.
 struct BallTransfer: Codable {
     /// Vertical position at the moment of exit, as a 0...1 fraction of the
     /// world height, so different screen sizes line up sensibly.
@@ -1533,6 +1780,19 @@ struct BallTransfer: Codable {
     let velocityDY: Double
     /// True if it left through the right edge (so it enters on the left).
     let exitedRightEdge: Bool
+    let colorIndex: Int
+    let patternIndex: Int
+    let skinPNG: Data?
+}
+
+/// Everything the ball carries when it falls through a hole toward the
+/// phone held underneath.
+struct BallDrop: Codable {
+    /// Where the hole sat on the sender's visible screen (0...1 on each
+    /// axis). Stacked phones share the same physical spot, so the catcher
+    /// lands the ball at the same fraction of its own screen.
+    let xScreenFraction: Double
+    let yScreenFraction: Double
     let colorIndex: Int
     let patternIndex: Int
     let skinPNG: Data?
@@ -1564,8 +1824,8 @@ final class MultipeerManager: NSObject {
 
     private(set) var isConnected = false
     private(set) var connectedPeerName: String?
-    /// Called on the main thread when a ball arrives from the peer.
-    var onBallReceived: ((BallTransfer) -> Void)?
+    /// Called on the main thread when a message arrives from the peer.
+    var onMessage: ((PeerMessage) -> Void)?
 
     func start() {
         advertiser.delegate = self
@@ -1574,9 +1834,9 @@ final class MultipeerManager: NSObject {
         browser.startBrowsingForPeers()
     }
 
-    func send(_ transfer: BallTransfer) {
+    func send(_ message: PeerMessage) {
         guard !session.connectedPeers.isEmpty,
-              let data = try? JSONEncoder().encode(transfer) else { return }
+              let data = try? JSONEncoder().encode(message) else { return }
         try? session.send(data, toPeers: session.connectedPeers, with: .reliable)
     }
 }
@@ -1592,10 +1852,10 @@ extension MultipeerManager: MCSessionDelegate {
 
     func session(_ session: MCSession, didReceive data: Data,
                  fromPeer peerID: MCPeerID) {
-        guard let transfer = try? JSONDecoder().decode(BallTransfer.self,
-                                                       from: data) else { return }
+        guard let message = try? JSONDecoder().decode(PeerMessage.self,
+                                                      from: data) else { return }
         DispatchQueue.main.async {
-            self.onBallReceived?(transfer)
+            self.onMessage?(message)
         }
     }
 
