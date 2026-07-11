@@ -10,9 +10,17 @@ and catch it when it falls through a hole. Full concept in
   and bounces off the screen edges. Flick the phone up and the ball hops
   (and can jump over holes); landings have haptics and dust effects.
 - ✅ **Milestone 2** — holes the ball can fall into.
-- ✅ **Adventure mode** — three hand-built desk courses: roll from start to
-  the glowing goal hole past pencils, erasers, dominoes and coin bumpers,
-  hopping over trap holes; falling restarts the level.
+- ✅ **Adventure mode** — three hand-built garden courses on the deck:
+  roll from start to the glowing goal hole past stones, fallen branches
+  and springy mushroom bumpers, hopping over trap holes (a hop also
+  clears the low objects); falling restarts the level. Tall garden
+  fences block the path and can't be jumped.
+- ✅ **Paired courses** — every level is a *pair* of different layouts.
+  Connected phones automatically split them (course A / course B), so
+  where your course fences you in, the other phone's course is open:
+  drop through a hole to the phone below or roll off an edge to the
+  phone beside you to get past. Solo play uses course A, whose fences
+  always leave a guarded gap.
 - ✅ **Milestone 3** — ball rolls between two phones placed side by side.
 - ✅ **Milestone 4** — catch the falling ball with a phone underneath.
   The two phones sense their real physical arrangement over **UWB**

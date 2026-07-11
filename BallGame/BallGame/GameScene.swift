@@ -14,94 +14,183 @@ enum L10n {
     static func t(_ ja: String, _ en: String) -> String { isJapanese ? ja : en }
 }
 
-/// Adventure mode: hand-built courses on a wooden desk. Tilt to roll the
-/// ball from the start to the glowing goal hole, past everyday desk objects,
-/// without dropping into a trap hole. Flick the phone up to hop over traps.
+/// Adventure mode: hand-built garden courses on a wooden deck. Tilt to
+/// roll the ball from the start to the glowing goal hole, past stones,
+/// branches and mushrooms, without dropping into a trap hole. Flick the
+/// phone up to hop over traps and low objects — but not the tall fences:
+/// those you get past through the *other* phone's course, whose layout is
+/// different (drop through a hole to the phone below, or roll off an edge
+/// to the phone beside you).
 final class GameScene: SKScene {
 
     // MARK: - Level definitions
 
-    /// A desk object sitting on the table that the ball bounces off.
+    /// A garden object sitting on the deck. Stones, branches and mushrooms
+    /// are low — a hopping ball sails over them. Fences are tall walls the
+    /// ball can never jump; get past them through a gap, by dropping
+    /// through a hole to the other phone's course, or by rolling off the
+    /// edge onto it.
     struct Prop {
-        enum Kind { case pencil, eraser, domino, coin }
+        enum Kind {
+            case stone, branch, mushroom
+            /// A tall fence wall; `width` is a fraction of one screen width.
+            case fence(width: CGFloat)
+        }
         let kind: Kind
         /// Position in normalized world coordinates (0...1 on each axis).
         let position: CGPoint
-        let rotation: CGFloat
+        var rotation: CGFloat = 0
     }
 
-    /// A hand-built course. Positions are normalized to the world size so
-    /// the same course plays on any screen size.
-    struct Level {
-        let screensWide: Int
-        let screensTall: Int
+    /// One player's half of a level. Positions are normalized to the world
+    /// size so the same course plays on any screen size.
+    struct Course {
         let start: CGPoint
         let goal: CGPoint
         let traps: [CGPoint]
         let props: [Prop]
     }
 
+    /// A level is a *pair* of different courses. Connected phones each get
+    /// one (decided by the connection tie-break); where your course walls
+    /// you in, the other course is open — drop through a hole or roll off
+    /// an edge to borrow it. Solo play uses course A.
+    struct Level {
+        let screensWide: Int
+        let screensTall: Int
+        let courseA: Course
+        let courseB: Course
+    }
+
     private static let levels: [Level] = [
-        // Level 1 — a gentle climb: learn to steer past a pencil and hop traps.
+        // Level 1 — one fence each, gaps on opposite sides: learn that the
+        // other course is open where yours is blocked.
         Level(
             screensWide: 1, screensTall: 2,
-            start: CGPoint(x: 0.5, y: 0.10),
-            goal: CGPoint(x: 0.5, y: 0.92),
-            traps: [
-                CGPoint(x: 0.35, y: 0.42),
-                CGPoint(x: 0.68, y: 0.60),
-            ],
-            props: [
-                Prop(kind: .pencil, position: CGPoint(x: 0.5, y: 0.28), rotation: 0.35),
-                Prop(kind: .eraser, position: CGPoint(x: 0.22, y: 0.55), rotation: -0.4),
-                Prop(kind: .domino, position: CGPoint(x: 0.78, y: 0.74), rotation: 0.9),
-                Prop(kind: .coin, position: CGPoint(x: 0.28, y: 0.80), rotation: 0),
-            ]
+            courseA: Course(
+                start: CGPoint(x: 0.5, y: 0.08),
+                goal: CGPoint(x: 0.5, y: 0.92),
+                traps: [
+                    CGPoint(x: 0.5, y: 0.30),
+                    CGPoint(x: 0.30, y: 0.62),
+                ],
+                props: [
+                    Prop(kind: .fence(width: 0.62), position: CGPoint(x: 0.31, y: 0.42)),
+                    Prop(kind: .mushroom, position: CGPoint(x: 0.80, y: 0.46)),
+                    Prop(kind: .stone, position: CGPoint(x: 0.60, y: 0.66)),
+                    Prop(kind: .branch, position: CGPoint(x: 0.35, y: 0.80), rotation: 0.5),
+                ]
+            ),
+            courseB: Course(
+                start: CGPoint(x: 0.5, y: 0.08),
+                goal: CGPoint(x: 0.5, y: 0.92),
+                traps: [
+                    CGPoint(x: 0.5, y: 0.44),
+                    CGPoint(x: 0.72, y: 0.75),
+                ],
+                props: [
+                    Prop(kind: .fence(width: 0.62), position: CGPoint(x: 0.69, y: 0.55)),
+                    Prop(kind: .mushroom, position: CGPoint(x: 0.18, y: 0.58)),
+                    Prop(kind: .stone, position: CGPoint(x: 0.30, y: 0.30)),
+                    Prop(kind: .branch, position: CGPoint(x: 0.60, y: 0.20), rotation: -0.4),
+                    Prop(kind: .stone, position: CGPoint(x: 0.75, y: 0.86)),
+                ]
+            )
         ),
-        // Level 2 — pencil chicanes; the goal is tucked behind a coin bumper.
+        // Level 2 — zigzag fences, mirrored between the two courses, with
+        // mushroom bumpers guarding the gaps.
         Level(
             screensWide: 1, screensTall: 2,
-            start: CGPoint(x: 0.2, y: 0.08),
-            goal: CGPoint(x: 0.8, y: 0.93),
-            traps: [
-                CGPoint(x: 0.5, y: 0.28),
-                CGPoint(x: 0.25, y: 0.48),
-                CGPoint(x: 0.75, y: 0.55),
-                CGPoint(x: 0.5, y: 0.74),
-            ],
-            props: [
-                Prop(kind: .pencil, position: CGPoint(x: 0.38, y: 0.2), rotation: 1.15),
-                Prop(kind: .pencil, position: CGPoint(x: 0.68, y: 0.42), rotation: -0.85),
-                Prop(kind: .eraser, position: CGPoint(x: 0.18, y: 0.66), rotation: 0.3),
-                Prop(kind: .domino, position: CGPoint(x: 0.55, y: 0.6), rotation: 0.4),
-                Prop(kind: .coin, position: CGPoint(x: 0.82, y: 0.8), rotation: 0),
-                Prop(kind: .coin, position: CGPoint(x: 0.35, y: 0.86), rotation: 0),
-            ]
+            courseA: Course(
+                start: CGPoint(x: 0.2, y: 0.08),
+                goal: CGPoint(x: 0.8, y: 0.93),
+                traps: [
+                    CGPoint(x: 0.85, y: 0.24),
+                    CGPoint(x: 0.5, y: 0.50),
+                    CGPoint(x: 0.25, y: 0.78),
+                ],
+                props: [
+                    Prop(kind: .fence(width: 0.7), position: CGPoint(x: 0.35, y: 0.32)),
+                    Prop(kind: .fence(width: 0.7), position: CGPoint(x: 0.65, y: 0.68)),
+                    Prop(kind: .mushroom, position: CGPoint(x: 0.88, y: 0.40)),
+                    Prop(kind: .mushroom, position: CGPoint(x: 0.12, y: 0.60)),
+                    Prop(kind: .stone, position: CGPoint(x: 0.50, y: 0.57)),
+                    Prop(kind: .branch, position: CGPoint(x: 0.60, y: 0.12), rotation: 1.0),
+                    Prop(kind: .branch, position: CGPoint(x: 0.40, y: 0.85), rotation: -0.7),
+                ]
+            ),
+            courseB: Course(
+                start: CGPoint(x: 0.8, y: 0.08),
+                goal: CGPoint(x: 0.2, y: 0.93),
+                traps: [
+                    CGPoint(x: 0.15, y: 0.24),
+                    CGPoint(x: 0.5, y: 0.52),
+                    CGPoint(x: 0.75, y: 0.78),
+                ],
+                props: [
+                    Prop(kind: .fence(width: 0.7), position: CGPoint(x: 0.65, y: 0.32)),
+                    Prop(kind: .fence(width: 0.7), position: CGPoint(x: 0.35, y: 0.68)),
+                    Prop(kind: .mushroom, position: CGPoint(x: 0.12, y: 0.40)),
+                    Prop(kind: .mushroom, position: CGPoint(x: 0.88, y: 0.60)),
+                    Prop(kind: .stone, position: CGPoint(x: 0.45, y: 0.44)),
+                    Prop(kind: .branch, position: CGPoint(x: 0.30, y: 0.14), rotation: -1.0),
+                    Prop(kind: .branch, position: CGPoint(x: 0.70, y: 0.88), rotation: 0.6),
+                ]
+            )
         ),
-        // Level 3 — a wide open desk, diagonal trek with plenty of hazards.
+        // Level 3 — a wide garden trek; the fence maze differs completely
+        // between the two courses.
         Level(
             screensWide: 2, screensTall: 2,
-            start: CGPoint(x: 0.08, y: 0.10),
-            goal: CGPoint(x: 0.92, y: 0.90),
-            traps: [
-                CGPoint(x: 0.3, y: 0.25),
-                CGPoint(x: 0.55, y: 0.4),
-                CGPoint(x: 0.2, y: 0.55),
-                CGPoint(x: 0.75, y: 0.6),
-                CGPoint(x: 0.45, y: 0.72),
-                CGPoint(x: 0.85, y: 0.78),
-            ],
-            props: [
-                Prop(kind: .pencil, position: CGPoint(x: 0.4, y: 0.15), rotation: -0.3),
-                Prop(kind: .pencil, position: CGPoint(x: 0.65, y: 0.5), rotation: 0.75),
-                Prop(kind: .pencil, position: CGPoint(x: 0.25, y: 0.7), rotation: 1.35),
-                Prop(kind: .eraser, position: CGPoint(x: 0.55, y: 0.28), rotation: 0.5),
-                Prop(kind: .eraser, position: CGPoint(x: 0.8, y: 0.35), rotation: -0.7),
-                Prop(kind: .domino, position: CGPoint(x: 0.15, y: 0.38), rotation: 0.2),
-                Prop(kind: .domino, position: CGPoint(x: 0.6, y: 0.85), rotation: -0.5),
-                Prop(kind: .coin, position: CGPoint(x: 0.35, y: 0.55), rotation: 0),
-                Prop(kind: .coin, position: CGPoint(x: 0.7, y: 0.72), rotation: 0),
-            ]
+            courseA: Course(
+                start: CGPoint(x: 0.08, y: 0.10),
+                goal: CGPoint(x: 0.92, y: 0.90),
+                traps: [
+                    CGPoint(x: 0.30, y: 0.22),
+                    CGPoint(x: 0.60, y: 0.38),
+                    CGPoint(x: 0.20, y: 0.60),
+                    CGPoint(x: 0.55, y: 0.78),
+                    CGPoint(x: 0.85, y: 0.60),
+                ],
+                props: [
+                    Prop(kind: .fence(width: 0.5), position: CGPoint(x: 0.25, y: 0.30)),
+                    Prop(kind: .fence(width: 0.5), position: CGPoint(x: 0.75, y: 0.45)),
+                    Prop(kind: .fence(width: 0.6), position: CGPoint(x: 0.40, y: 0.70)),
+                    Prop(kind: .stone, position: CGPoint(x: 0.45, y: 0.15)),
+                    Prop(kind: .stone, position: CGPoint(x: 0.70, y: 0.55)),
+                    Prop(kind: .stone, position: CGPoint(x: 0.15, y: 0.45)),
+                    Prop(kind: .mushroom, position: CGPoint(x: 0.50, y: 0.30)),
+                    Prop(kind: .mushroom, position: CGPoint(x: 0.85, y: 0.75)),
+                    Prop(kind: .mushroom, position: CGPoint(x: 0.10, y: 0.80)),
+                    Prop(kind: .branch, position: CGPoint(x: 0.65, y: 0.20), rotation: -0.5),
+                    Prop(kind: .branch, position: CGPoint(x: 0.35, y: 0.55), rotation: 0.9),
+                    Prop(kind: .branch, position: CGPoint(x: 0.80, y: 0.30), rotation: 1.2),
+                ]
+            ),
+            courseB: Course(
+                start: CGPoint(x: 0.10, y: 0.08),
+                goal: CGPoint(x: 0.90, y: 0.92),
+                traps: [
+                    CGPoint(x: 0.75, y: 0.18),
+                    CGPoint(x: 0.40, y: 0.42),
+                    CGPoint(x: 0.65, y: 0.60),
+                    CGPoint(x: 0.25, y: 0.80),
+                ],
+                props: [
+                    Prop(kind: .fence(width: 0.5), position: CGPoint(x: 0.70, y: 0.25)),
+                    Prop(kind: .fence(width: 0.6), position: CGPoint(x: 0.30, y: 0.50)),
+                    Prop(kind: .fence(width: 0.5), position: CGPoint(x: 0.65, y: 0.75)),
+                    Prop(kind: .stone, position: CGPoint(x: 0.20, y: 0.25)),
+                    Prop(kind: .stone, position: CGPoint(x: 0.55, y: 0.55)),
+                    Prop(kind: .stone, position: CGPoint(x: 0.85, y: 0.45)),
+                    Prop(kind: .mushroom, position: CGPoint(x: 0.35, y: 0.15)),
+                    Prop(kind: .mushroom, position: CGPoint(x: 0.90, y: 0.65)),
+                    Prop(kind: .mushroom, position: CGPoint(x: 0.15, y: 0.60)),
+                    Prop(kind: .branch, position: CGPoint(x: 0.50, y: 0.30), rotation: 0.4),
+                    Prop(kind: .branch, position: CGPoint(x: 0.75, y: 0.85), rotation: -0.8),
+                    Prop(kind: .branch, position: CGPoint(x: 0.30, y: 0.68), rotation: 1.3),
+                ]
+            )
         ),
     ]
 
@@ -124,6 +213,15 @@ final class GameScene: SKScene {
     private var goalPosition = CGPoint.zero
     /// Trap holes currently on the floor.
     private var holes: [SKSpriteNode] = []
+    /// Obstacles currently on the floor (used to keep drop landings clear).
+    private var propNodes: [SKSpriteNode] = []
+
+    // Physics categories: a hopping ball clears low garden objects but
+    // never the tall fences or the world walls.
+    private static let ballCategory: UInt32 = 1 << 0
+    private static let lowPropCategory: UInt32 = 1 << 1
+    private static let fenceCategory: UInt32 = 1 << 2
+    private static let wallCategory: UInt32 = 1 << 3
 
     /// True while the ball is in the air after a hop; tilt steering is
     /// suspended so the flight feels ballistic.
@@ -224,7 +322,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 33
+    private static let buildNumber = 34
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -310,6 +408,13 @@ final class GameScene: SKScene {
         }
     }
 
+    /// Which of the level's two courses this phone plays: solo always gets
+    /// course A; connected phones split A/B by the connection tie-break so
+    /// the two screens always show different layouts.
+    private func activeCourse(of level: Level) -> Course {
+        (peerConnected && !multipeer.isPrimary) ? level.courseB : level.courseA
+    }
+
     /// Tear down the old course and build the new one. The ball, shadow and
     /// camera are re-added each time; everything else is created fresh.
     private func loadLevel(_ index: Int) {
@@ -317,6 +422,7 @@ final class GameScene: SKScene {
         removeAllChildren()
         cameraNode.removeAllChildren()
         holes.removeAll()
+        propNodes.removeAll()
         isAirborne = false
         isFalling = false
         isTransitioning = false
@@ -325,13 +431,14 @@ final class GameScene: SKScene {
         lastUpdateTime = nil
 
         let level = GameScene.levels[index]
+        let course = activeCourse(of: level)
         worldRect = CGRect(
             x: 0, y: 0,
             width: size.width * CGFloat(level.screensWide),
             height: size.height * CGFloat(level.screensTall)
         )
-        startPosition = denormalize(level.start)
-        goalPosition = denormalize(level.goal)
+        startPosition = denormalize(course.start)
+        goalPosition = denormalize(course.goal)
 
         camera = cameraNode
         addChild(cameraNode)
@@ -341,11 +448,11 @@ final class GameScene: SKScene {
         addChild(wallsNode)
         rebuildWalls()
 
-        for trap in level.traps {
+        for trap in course.traps {
             addTrap(at: denormalize(trap))
         }
         addGoal(at: goalPosition)
-        for prop in level.props {
+        for prop in course.props {
             addProp(prop)
         }
 
@@ -380,6 +487,7 @@ final class GameScene: SKScene {
 
         func addWall(_ body: SKPhysicsBody) {
             body.friction = 0.1
+            body.categoryBitMask = GameScene.wallCategory
             let node = SKNode()
             node.physicsBody = body
             wallsNode.addChild(node)
@@ -497,30 +605,36 @@ final class GameScene: SKScene {
         glow.run(.repeatForever(pulse))
     }
 
-    /// Place a desk object with its texture, silhouette shadow, and a static
-    /// physics body so the ball bounces off it.
+    /// Place a garden object with its texture, silhouette shadow, and a
+    /// static physics body so the ball bounces off it. Low objects live in
+    /// lowPropCategory (a hop clears them); fences are fenceCategory.
     private func addProp(_ prop: Prop) {
         let texture: SKTexture
         let body: SKPhysicsBody
         var restitution: CGFloat = 0.4
+        var category = GameScene.lowPropCategory
 
         switch prop.kind {
-        case .pencil:
-            texture = GameScene.pencilTexture()
-            body = SKPhysicsBody(rectangleOf: texture.size())
+        case .stone:
+            texture = GameScene.stoneTexture()
+            body = SKPhysicsBody(circleOfRadius: texture.size().width * 0.46)
+            restitution = 0.3 // dead rock: kills most of the bounce
+        case .branch:
+            texture = GameScene.branchTexture()
+            body = SKPhysicsBody(rectangleOf: CGSize(
+                width: texture.size().width * 0.94,
+                height: texture.size().height * 0.7
+            ))
             restitution = 0.45
-        case .eraser:
-            texture = GameScene.eraserTexture()
+        case .mushroom:
+            texture = GameScene.mushroomTexture()
+            body = SKPhysicsBody(circleOfRadius: texture.size().width * 0.46)
+            restitution = 0.9 // springy cap: the garden's bumper
+        case .fence(let width):
+            texture = GameScene.fenceTexture(length: width * size.width)
             body = SKPhysicsBody(rectangleOf: texture.size())
-            restitution = 0.8 // rubber: bounciest wall on the desk
-        case .domino:
-            texture = GameScene.dominoTexture()
-            body = SKPhysicsBody(rectangleOf: texture.size())
-            restitution = 0.4
-        case .coin:
-            texture = GameScene.coinTexture()
-            body = SKPhysicsBody(circleOfRadius: texture.size().width / 2)
-            restitution = 0.85 // round bumper
+            restitution = 0.35
+            category = GameScene.fenceCategory
         }
 
         let node = SKSpriteNode(texture: texture)
@@ -528,7 +642,7 @@ final class GameScene: SKScene {
         node.zRotation = prop.rotation
         node.zPosition = 6
 
-        // Silhouette drop shadow so the object sits above the table.
+        // Silhouette drop shadow so the object sits above the deck.
         let propShadow = SKSpriteNode(texture: texture)
         propShadow.color = .black
         propShadow.colorBlendFactor = 1
@@ -540,9 +654,11 @@ final class GameScene: SKScene {
         body.isDynamic = false
         body.restitution = restitution
         body.friction = 0.2
+        body.categoryBitMask = category
         node.physicsBody = body
 
         addChild(node)
+        propNodes.append(node)
     }
 
     private func setUpHUD(levelNumber: Int) {
@@ -646,6 +762,9 @@ final class GameScene: SKScene {
         body.friction = 0.15
         body.linearDamping = 0.12 // slight rolling resistance so it settles
         body.allowsRotation = false // rolling is drawn via the surface pattern
+        body.categoryBitMask = GameScene.ballCategory
+        body.collisionBitMask = GameScene.lowPropCategory
+            | GameScene.fenceCategory | GameScene.wallCategory
         ball.physicsBody = body
 
         let mask = SKShapeNode(circleOfRadius: GameScene.ballRadius - 1)
@@ -782,8 +901,10 @@ final class GameScene: SKScene {
         guard let body = ball.physicsBody else { return }
 
 
-        // Track the connection: start/stop UWB ranging and, if the peer
-        // vanished while holding the ball, bring it home.
+        // Track the connection: start/stop UWB ranging and rebuild the
+        // level, because connecting (or losing the peer) switches which of
+        // the level's two courses this phone plays. The reload also brings
+        // a visiting ball home.
         if multipeer.isConnected != peerConnected {
             peerConnected = multipeer.isConnected
             if peerConnected {
@@ -791,17 +912,10 @@ final class GameScene: SKScene {
             } else {
                 nearby.stop()
             }
+            removeAction(forKey: "dropTimeout")
+            loadLevel(levelIndex)
             updateConnectionLabel()
-            if !peerConnected, !ballIsHere {
-                ballIsHere = true
-                isFalling = false
-                awaitingDropResult = false
-                removeAction(forKey: "dropTimeout")
-                ball.isHidden = false
-                shadow.isHidden = false
-                ball.position = startPosition
-                body.velocity = .zero
-            }
+            return
         }
 
         // The arrangement is live: follow it frame to frame. Side passing
@@ -950,9 +1064,12 @@ final class GameScene: SKScene {
     // MARK: - Hop
 
     /// Pop the ball into the air: it grows (closer to the viewer) while its
-    /// shadow shrinks, then lands with a small squash.
+    /// shadow shrinks, then lands with a small squash. Airborne, the ball
+    /// sails over stones, branches and mushrooms — but not the tall fences.
     private func hop() {
         isAirborne = true
+        ball.physicsBody?.collisionBitMask =
+            GameScene.fenceCategory | GameScene.wallCategory
         let half = GameScene.hopDuration / 2
 
         landingHaptic.prepare()
@@ -990,6 +1107,8 @@ final class GameScene: SKScene {
     /// across the floor from the touchdown point.
     private func didLand() {
         isAirborne = false
+        ball.physicsBody?.collisionBitMask = GameScene.lowPropCategory
+            | GameScene.fenceCategory | GameScene.wallCategory
         landingHaptic.impactOccurred()
 
         let ring = SKShapeNode(circleOfRadius: GameScene.ballRadius)
@@ -1227,7 +1346,10 @@ final class GameScene: SKScene {
     }
 
     /// Push a landing point out of any hole (trap or goal) it would drop
-    /// straight into, so a caught ball settles on solid ground beside it.
+    /// straight into — and out of any obstacle it would materialize
+    /// inside — so a caught ball settles on open ground beside them.
+    /// The two phones run different courses, so the spot that was a plain
+    /// floor upstairs can be anything down here.
     private func safeLandingPoint(_ point: CGPoint) -> CGPoint {
         var point = point
         let clearance = GameScene.holeRadius + GameScene.ballRadius
@@ -1248,6 +1370,25 @@ final class GameScene: SKScene {
                 point = CGPoint(x: center.x + dx / distance * clearance,
                                 y: center.y + dy / distance * clearance)
             }
+        }
+
+        // Out of obstacles: shift past the nearest edge of any prop whose
+        // (rotation-aware) frame the point falls inside.
+        for prop in propNodes {
+            let zone = prop.frame.insetBy(dx: -GameScene.ballRadius,
+                                          dy: -GameScene.ballRadius)
+            guard zone.contains(point) else { continue }
+            // Cheapest escape among the four sides.
+            let pushes = [
+                CGPoint(x: zone.minX - 1, y: point.y),
+                CGPoint(x: zone.maxX + 1, y: point.y),
+                CGPoint(x: point.x, y: zone.minY - 1),
+                CGPoint(x: point.x, y: zone.maxY + 1),
+            ]
+            point = pushes.min(by: {
+                hypot($0.x - point.x, $0.y - point.y)
+                    < hypot($1.x - point.x, $1.y - point.y)
+            }) ?? point
         }
         return point
     }
@@ -1786,151 +1927,191 @@ final class GameScene: SKScene {
         return SKTexture(image: image)
     }
 
-    /// A yellow pencil seen from above: painted body, sharpened wooden tip
-    /// with graphite, and a pink eraser behind a metal ferrule.
-    private static func pencilTexture() -> SKTexture {
-        let size = CGSize(width: 190, height: 16)
+    /// A rounded garden stone seen from above: gray body, mossy blotches,
+    /// a lit top-left edge and a darker ground line.
+    private static func stoneTexture() -> SKTexture {
+        let diameter: CGFloat = 52
+        let size = CGSize(width: diameter, height: diameter)
         let image = UIGraphicsImageRenderer(size: size).image { ctx in
             let c = ctx.cgContext
 
-            // Painted body.
-            let bodyRect = CGRect(x: 26, y: 0, width: 138, height: 16)
-            UIColor(red: 0.93, green: 0.72, blue: 0.18, alpha: 1).setFill()
-            c.fill(bodyRect)
-            // Facet shading lines along the body.
-            UIColor(red: 0.78, green: 0.58, blue: 0.10, alpha: 1).setFill()
-            c.fill(CGRect(x: 26, y: 0, width: 138, height: 3.5))
-            UIColor(red: 1.0, green: 0.83, blue: 0.38, alpha: 1).setFill()
-            c.fill(CGRect(x: 26, y: 5.5, width: 138, height: 3))
-
-            // Sharpened wooden tip.
-            let wood = UIBezierPath()
-            wood.move(to: CGPoint(x: 26, y: 0))
-            wood.addLine(to: CGPoint(x: 26, y: 16))
-            wood.addLine(to: CGPoint(x: 6, y: 8))
-            wood.close()
-            UIColor(red: 0.87, green: 0.72, blue: 0.52, alpha: 1).setFill()
-            wood.fill()
-            // Graphite point.
-            let graphite = UIBezierPath()
-            graphite.move(to: CGPoint(x: 9, y: 6.5))
-            graphite.addLine(to: CGPoint(x: 9, y: 9.5))
-            graphite.addLine(to: CGPoint(x: 0, y: 8))
-            graphite.close()
-            UIColor(red: 0.25, green: 0.25, blue: 0.28, alpha: 1).setFill()
-            graphite.fill()
-
-            // Metal ferrule.
-            UIColor(red: 0.75, green: 0.76, blue: 0.80, alpha: 1).setFill()
-            c.fill(CGRect(x: 164, y: 0, width: 12, height: 16))
-            UIColor(red: 0.55, green: 0.56, blue: 0.62, alpha: 1).setFill()
-            c.fill(CGRect(x: 167, y: 0, width: 2, height: 16))
-            c.fill(CGRect(x: 171, y: 0, width: 2, height: 16))
-
-            // Pink eraser.
-            let eraserRect = CGRect(x: 176, y: 0, width: 14, height: 16)
-            UIColor(red: 0.94, green: 0.6, blue: 0.62, alpha: 1).setFill()
-            UIBezierPath(roundedRect: eraserRect,
-                         byRoundingCorners: [.topRight, .bottomRight],
-                         cornerRadii: CGSize(width: 7, height: 7)).fill()
-        }
-        return SKTexture(image: image)
-    }
-
-    /// A white eraser in a blue paper sleeve.
-    private static func eraserTexture() -> SKTexture {
-        let size = CGSize(width: 76, height: 38)
-        let image = UIGraphicsImageRenderer(size: size).image { ctx in
-            let c = ctx.cgContext
-
-            let body = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size),
-                                    cornerRadius: 6)
-            UIColor(red: 0.96, green: 0.96, blue: 0.94, alpha: 1).setFill()
-            body.fill()
-            // Subtle bottom shading for thickness.
-            UIColor(red: 0.8, green: 0.8, blue: 0.78, alpha: 1).setFill()
-            c.fill(CGRect(x: 3, y: 30, width: 70, height: 5))
-
-            // Paper sleeve.
-            UIColor(red: 0.20, green: 0.32, blue: 0.62, alpha: 1).setFill()
-            c.fill(CGRect(x: 20, y: 0, width: 36, height: 38))
-            UIColor(white: 1, alpha: 0.85).setFill()
-            c.fill(CGRect(x: 24, y: 15, width: 28, height: 3))
-            c.fill(CGRect(x: 28, y: 22, width: 20, height: 2))
-        }
-        return SKTexture(image: image)
-    }
-
-    /// A domino tile lying flat: ivory face, dividing line, 3|5 pips.
-    private static func dominoTexture() -> SKTexture {
-        let size = CGSize(width: 66, height: 34)
-        let image = UIGraphicsImageRenderer(size: size).image { ctx in
-            let c = ctx.cgContext
-
-            let body = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size),
-                                    cornerRadius: 5)
-            UIColor(red: 0.97, green: 0.95, blue: 0.90, alpha: 1).setFill()
-            body.fill()
-            UIColor(red: 0.75, green: 0.72, blue: 0.66, alpha: 1).setStroke()
-            body.lineWidth = 1.5
-            body.stroke()
-
-            // Divider.
-            UIColor(red: 0.55, green: 0.52, blue: 0.48, alpha: 1).setFill()
-            c.fill(CGRect(x: 32, y: 4, width: 2, height: 26))
-
-            func pip(_ x: CGFloat, _ y: CGFloat) {
-                UIColor(red: 0.15, green: 0.17, blue: 0.3, alpha: 1).setFill()
-                UIBezierPath(ovalIn: CGRect(x: x - 2.8, y: y - 2.8,
-                                            width: 5.6, height: 5.6)).fill()
+            // Slightly irregular oval silhouette.
+            let body = UIBezierPath()
+            let center = CGPoint(x: diameter / 2, y: diameter / 2)
+            var first = true
+            for step in 0..<10 {
+                let angle = CGFloat(step) / 10 * 2 * .pi
+                let wobble: CGFloat = [1.0, 0.93, 0.98, 0.9, 1.0,
+                                       0.95, 0.88, 0.97, 0.92, 0.99][step]
+                let point = CGPoint(
+                    x: center.x + cos(angle) * diameter / 2 * wobble * 0.96,
+                    y: center.y + sin(angle) * diameter / 2 * wobble * 0.96
+                )
+                if first { body.move(to: point); first = false }
+                else { body.addLine(to: point) }
             }
-            // Left: 3 pips.
-            pip(9, 8); pip(16, 17); pip(23, 26)
-            // Right: 5 pips.
-            pip(42, 8); pip(58, 8); pip(50, 17); pip(42, 26); pip(58, 26)
+            body.close()
+            UIColor(red: 0.58, green: 0.58, blue: 0.56, alpha: 1).setFill()
+            body.fill()
+
+            // Shaded lower-right, lit upper-left.
+            c.saveGState()
+            body.addClip()
+            UIColor(red: 0.44, green: 0.44, blue: 0.43, alpha: 1).setFill()
+            c.fill(CGRect(x: diameter * 0.3, y: diameter * 0.55,
+                          width: diameter, height: diameter))
+            UIColor(red: 0.72, green: 0.72, blue: 0.70, alpha: 1).setFill()
+            UIBezierPath(ovalIn: CGRect(x: diameter * 0.12, y: diameter * 0.10,
+                                        width: diameter * 0.42,
+                                        height: diameter * 0.32)).fill()
+            // Moss flecks.
+            UIColor(red: 0.45, green: 0.55, blue: 0.35, alpha: 0.7).setFill()
+            UIBezierPath(ovalIn: CGRect(x: diameter * 0.6, y: diameter * 0.28,
+                                        width: 9, height: 6)).fill()
+            UIBezierPath(ovalIn: CGRect(x: diameter * 0.25, y: diameter * 0.62,
+                                        width: 7, height: 5)).fill()
+            c.restoreGState()
         }
         return SKTexture(image: image)
     }
 
-    /// A golden coin: rim, inner ring, and a bright crescent.
-    private static func coinTexture() -> SKTexture {
-        let diameter: CGFloat = 46
+    /// A fallen twig: bark-brown, slightly bent, with a snapped side stub
+    /// and pale end grain.
+    private static func branchTexture() -> SKTexture {
+        let size = CGSize(width: 150, height: 26)
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            let c = ctx.cgContext
+
+            // Gently bowed body.
+            let body = UIBezierPath()
+            body.move(to: CGPoint(x: 3, y: 12))
+            body.addQuadCurve(to: CGPoint(x: 147, y: 14),
+                              controlPoint: CGPoint(x: 75, y: 6))
+            body.addLine(to: CGPoint(x: 147, y: 22))
+            body.addQuadCurve(to: CGPoint(x: 3, y: 20),
+                              controlPoint: CGPoint(x: 75, y: 15))
+            body.close()
+            UIColor(red: 0.45, green: 0.32, blue: 0.20, alpha: 1).setFill()
+            body.fill()
+
+            // Bark streaks.
+            c.saveGState()
+            body.addClip()
+            UIColor(red: 0.33, green: 0.23, blue: 0.14, alpha: 1).setFill()
+            c.fill(CGRect(x: 3, y: 17, width: 144, height: 2))
+            UIColor(red: 0.58, green: 0.44, blue: 0.30, alpha: 1).setFill()
+            c.fill(CGRect(x: 3, y: 10, width: 144, height: 1.6))
+            c.restoreGState()
+
+            // Snapped side stub.
+            let stub = UIBezierPath()
+            stub.move(to: CGPoint(x: 96, y: 12))
+            stub.addLine(to: CGPoint(x: 112, y: 1))
+            stub.addLine(to: CGPoint(x: 119, y: 5))
+            stub.addLine(to: CGPoint(x: 104, y: 14))
+            stub.close()
+            UIColor(red: 0.40, green: 0.28, blue: 0.17, alpha: 1).setFill()
+            stub.fill()
+
+            // Pale end grain at both tips.
+            UIColor(red: 0.80, green: 0.68, blue: 0.50, alpha: 1).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 0, y: 11, width: 6, height: 10)).fill()
+            UIBezierPath(ovalIn: CGRect(x: 144, y: 13, width: 6, height: 10)).fill()
+        }
+        return SKTexture(image: image)
+    }
+
+    /// A toadstool cap seen from above: red dome, white spots, a bright
+    /// sheen toward the light. The springiest thing in the garden.
+    private static func mushroomTexture() -> SKTexture {
+        let diameter: CGFloat = 50
         let size = CGSize(width: diameter, height: diameter)
         let image = UIGraphicsImageRenderer(size: size).image { ctx in
             let c = ctx.cgContext
             let full = CGRect(origin: .zero, size: size)
 
-            UIColor(red: 0.86, green: 0.68, blue: 0.24, alpha: 1).setFill()
-            UIBezierPath(ovalIn: full).fill()
+            UIColor(red: 0.82, green: 0.20, blue: 0.16, alpha: 1).setFill()
+            UIBezierPath(ovalIn: full.insetBy(dx: 1, dy: 1)).fill()
 
-            // Milled rim.
-            UIColor(red: 0.66, green: 0.50, blue: 0.14, alpha: 1).setStroke()
-            let rim = UIBezierPath(ovalIn: full.insetBy(dx: 1.5, dy: 1.5))
-            rim.lineWidth = 2.5
+            // Darker rim so the cap reads as a dome.
+            UIColor(red: 0.60, green: 0.12, blue: 0.10, alpha: 1).setStroke()
+            let rim = UIBezierPath(ovalIn: full.insetBy(dx: 2.5, dy: 2.5))
+            rim.lineWidth = 3
             rim.stroke()
 
-            // Inner ring like an engraved face.
-            UIColor(red: 0.72, green: 0.55, blue: 0.16, alpha: 1).setStroke()
-            let inner = UIBezierPath(ovalIn: full.insetBy(dx: 8, dy: 8))
-            inner.lineWidth = 1.8
-            inner.stroke()
+            // White spots.
+            UIColor(red: 0.97, green: 0.95, blue: 0.90, alpha: 1).setFill()
+            for (x, y, r) in [(0.32, 0.30, 5.5), (0.62, 0.22, 4.0),
+                              (0.70, 0.58, 6.0), (0.30, 0.66, 4.5),
+                              (0.52, 0.44, 3.2)] {
+                UIBezierPath(ovalIn: CGRect(
+                    x: diameter * x - r, y: diameter * y - r,
+                    width: r * 2, height: r * 2
+                )).fill()
+            }
 
-            // Crescent shine toward the light.
+            // Sheen toward the light.
             if let sheen = CGGradient(
                 colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                colors: [UIColor(white: 1, alpha: 0.55).cgColor,
+                colors: [UIColor(white: 1, alpha: 0.45).cgColor,
                          UIColor(white: 1, alpha: 0).cgColor] as CFArray,
                 locations: [0, 1]
             ) {
                 c.addEllipse(in: full.insetBy(dx: 2, dy: 2))
                 c.clip()
-                let lightCenter = CGPoint(x: diameter * 0.32, y: diameter * 0.3)
+                let lightCenter = CGPoint(x: diameter * 0.32, y: diameter * 0.28)
                 c.drawRadialGradient(
                     sheen,
                     startCenter: lightCenter, startRadius: 0,
-                    endCenter: lightCenter, endRadius: diameter * 0.45,
+                    endCenter: lightCenter, endRadius: diameter * 0.5,
                     options: []
                 )
+            }
+        }
+        return SKTexture(image: image)
+    }
+
+    /// A run of garden fence seen from above: a long weathered beam with
+    /// post caps breaking the line. Too tall to hop.
+    private static func fenceTexture(length: CGFloat) -> SKTexture {
+        let height: CGFloat = 26
+        let size = CGSize(width: max(length, 60), height: height)
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            let c = ctx.cgContext
+
+            // Beam.
+            let beam = UIBezierPath(roundedRect: CGRect(x: 0, y: 4,
+                                                        width: size.width,
+                                                        height: 18),
+                                    cornerRadius: 4)
+            UIColor(red: 0.55, green: 0.42, blue: 0.28, alpha: 1).setFill()
+            beam.fill()
+
+            // Grain and edge shading.
+            c.saveGState()
+            beam.addClip()
+            UIColor(red: 0.42, green: 0.31, blue: 0.20, alpha: 1).setFill()
+            c.fill(CGRect(x: 0, y: 18, width: size.width, height: 4))
+            UIColor(red: 0.68, green: 0.54, blue: 0.38, alpha: 1).setFill()
+            c.fill(CGRect(x: 0, y: 6, width: size.width, height: 2.5))
+            UIColor(red: 0.47, green: 0.35, blue: 0.23, alpha: 0.8).setFill()
+            var grainX: CGFloat = 14
+            while grainX < size.width {
+                c.fill(CGRect(x: grainX, y: 8, width: 1.4, height: 10))
+                grainX += 26
+            }
+            c.restoreGState()
+
+            // Post caps every ~90 pt, and one at each end.
+            let postCount = max(Int(size.width / 90), 1)
+            for index in 0...postCount {
+                let x = size.width * CGFloat(index) / CGFloat(postCount)
+                let post = CGRect(x: min(max(x - 7, 0), size.width - 14),
+                                  y: 0, width: 14, height: height)
+                UIColor(red: 0.40, green: 0.29, blue: 0.18, alpha: 1).setFill()
+                UIBezierPath(roundedRect: post, cornerRadius: 3).fill()
+                UIColor(red: 0.60, green: 0.47, blue: 0.32, alpha: 1).setFill()
+                UIBezierPath(ovalIn: post.insetBy(dx: 3, dy: 8)).fill()
             }
         }
         return SKTexture(image: image)
@@ -2107,6 +2288,13 @@ final class MultipeerManager: NSObject {
     private(set) var isConnected = false
     private(set) var connectedPeerName: String?
     private var isRunning = false
+    /// Deterministic role split without negotiation: the lexicographically
+    /// smaller display name plays course A, the other course B. (The same
+    /// comparison already decides who sends the connection invitation.)
+    var isPrimary: Bool {
+        guard let peer = connectedPeerName else { return true }
+        return peerID.displayName < peer
+    }
     /// Called on the main thread when a message arrives from the peer.
     var onMessage: ((PeerMessage) -> Void)?
 
