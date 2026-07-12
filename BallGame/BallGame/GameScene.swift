@@ -191,7 +191,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 36
+    private static let buildNumber = 37
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -693,6 +693,31 @@ final class GameScene: SKScene {
     /// True when the ball wears a hand-drawn skin, which spins with motion
     /// instead of scrolling (a drawing can't tile seamlessly).
     private var isCustomSkin = false
+    /// Accumulated 3D orientation of the skin sphere; the shader applies
+    /// its inverse to look up the texture, so the picture rolls around the
+    /// ball in whatever direction the ball travels.
+    private var skinRotation = simd_quatf(angle: 0, axis: simd_float3(0, 0, 1))
+    private var skinRotationUniform: SKUniform?
+
+    /// Orthographic sphere shader: each pixel of the ball face becomes a
+    /// point on a 3D sphere, rotated by u_rot, then mapped to the skin
+    /// texture with an equirectangular projection — the same projection
+    /// the painting canvas uses on its SceneKit sphere.
+    private static let sphereSkinShaderSource = """
+    void main() {
+        vec2 p = v_tex_coord * 2.0 - 1.0;
+        float r2 = dot(p, p);
+        if (r2 > 1.0) {
+            gl_FragColor = vec4(0.0);
+        } else {
+            vec3 n = vec3(p.x, p.y, sqrt(1.0 - r2));
+            vec3 d = u_rot * n;
+            float uu = atan(d.x, d.z) / 6.28318530718 + 0.5;
+            float vv = 0.5 + asin(clamp(d.y, -1.0, 1.0)) / 3.14159265359;
+            gl_FragColor = texture2D(u_texture, vec2(uu, vv));
+        }
+    }
+    """
 
     private func buildBallIfNeeded() {
         guard ball.physicsBody == nil else { return }
@@ -750,18 +775,26 @@ final class GameScene: SKScene {
             isCustomSkin = true
             ball.fillColor = .white // shows through erased/transparent areas
             dotPattern.removeAllChildren()
-            // One sprite covering the whole face of the ball: the entire
-            // picture stays visible and spins with the roll (see
-            // scrollSurfacePattern), so you can always tell what it is —
-            // tiling and scrolling only ever showed a moving crop.
+            // The picture is wrapped around a 3D sphere in a fragment
+            // shader and rolled by the ball's motion (scrollSurfacePattern
+            // spins skinRotation). Facing forward it reads clearly; rolling
+            // it tumbles in any direction — vertical included — like a
+            // real printed ball.
             let sprite = SKSpriteNode(texture: SKTexture(image: skin))
             let diameter = GameScene.ballRadius * 2
             sprite.size = CGSize(width: diameter, height: diameter)
+            skinRotation = simd_quatf(angle: 0, axis: simd_float3(0, 0, 1))
+            let uniform = SKUniform(name: "u_rot",
+                                    matrixFloat3x3: matrix_identity_float3x3)
+            sprite.shader = SKShader(source: GameScene.sphereSkinShaderSource,
+                                     uniforms: [uniform])
+            skinRotationUniform = uniform
             dotPattern.addChild(sprite)
             return
         }
 
         isCustomSkin = false
+        skinRotationUniform = nil
         ball.fillColor = color
         rebuildSurfacePattern(pattern, on: color)
     }
@@ -967,13 +1000,24 @@ final class GameScene: SKScene {
 
     /// Seen from above, a rolling ball's top surface moves in the direction
     /// of travel — scroll the dots with the velocity and wrap them so the
-    /// pattern never runs out. A picture can't tile, so a custom skin spins
-    /// in place instead: the whole image stays visible, clearly rolling.
+    /// pattern never runs out. A custom skin instead rolls a real sphere:
+    /// the angular velocity of a ball rolling with velocity v is
+    /// ω = (-vy, vx, 0) / r, so the picture tumbles vertically,
+    /// horizontally, or diagonally exactly as the ball moves.
     private func scrollSurfacePattern(velocity: CGVector, dt: CGFloat) {
         if isCustomSkin {
-            let spin = (velocity.dx + velocity.dy) * dt
-                / (GameScene.ballRadius * 2)
-            dotPattern.zRotation -= spin
+            let wx = Float(-velocity.dy * dt / GameScene.ballRadius)
+            let wy = Float(velocity.dx * dt / GameScene.ballRadius)
+            let angle = sqrt(wx * wx + wy * wy)
+            if angle > 0.0001, let uniform = skinRotationUniform {
+                let axis = simd_normalize(simd_float3(wx, wy, 0))
+                skinRotation = simd_quatf(angle: angle, axis: axis)
+                    * skinRotation
+                // The shader maps a screen point back into the picture, so
+                // it needs the inverse of the sphere's orientation.
+                uniform.matrixFloat3x3Value =
+                    simd_float3x3(skinRotation.inverse)
+            }
             return
         }
         let spacing = GameScene.dotSpacing

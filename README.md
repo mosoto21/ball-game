@@ -28,9 +28,10 @@ and catch it when it falls through a hole. Full concept in
   automatically (like `deck.png` does for the floor).
 - ✅ **Ball skins** — color + pattern picker, paint your own skin on a 3D
   ball, or put a photo from your library on it. Patterns scroll with the
-  roll; a painted/photo skin shows the whole picture on the ball's face
-  and spins as it rolls, so you can always tell what it is. Skins travel
-  with the ball to the other phone.
+  roll; a painted/photo skin is wrapped around a real sphere in a
+  fragment shader and tumbles with the ball's motion — vertically,
+  horizontally, diagonally — while staying recognizable whenever it
+  faces you. Skins travel with the ball to the other phone.
 - ✅ **Milestone 3** — ball rolls between two phones placed side by side
   (entry height matches the sender's physical screen height).
 - ✅ **Milestone 4** — catch the falling ball with a phone underneath.
