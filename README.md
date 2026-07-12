@@ -15,7 +15,11 @@ and catch it when it falls through a hole. Full concept in
   brand-new random course. Difficulty ramps over the first ~150 m:
   bands pack tighter, bridges narrow, chasms deepen, bumpers multiply,
   walls grow into chicanes, and guards appear behind hurdles and at
-  bridge exits. Obstacle bands:
+  bridge exits. The floor also **collapses from below** — a glowing dark
+  edge climbs after the ball, faster the higher you are, and never trails
+  more than two screens behind, so playing slow and safe is not an
+  option; get swallowed and the run ends (unless a phone underneath
+  catches the falling ball). Obstacle bands:
   - **Hurdles** — amber chevron bars spanning the whole screen; the only
     way past is a hop (flick the phone up).
   - **Bumpers** — coral rings that fling the ball back hard.

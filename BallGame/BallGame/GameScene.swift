@@ -85,6 +85,12 @@ final class GameScene: SKScene {
     private var floorTileHeight: CGFloat = 0
     private var floorMirrors = false
 
+    // The collapse chasing the ball from below (the anti-stalling clock):
+    // everything under chaseY has fallen away. Stop climbing and it
+    // swallows the ball.
+    private var chaseY: CGFloat = 0
+    private let collapseNode = SKNode()
+
     // Physics categories: a hopping ball clears low garden objects but
     // never the tall fences or the world walls.
     private static let ballCategory: UInt32 = 1 << 0
@@ -191,7 +197,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 38
+    private static let buildNumber = 39
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -250,6 +256,14 @@ final class GameScene: SKScene {
     private static let worldScreens: CGFloat = 300
     /// Meters of climb over which the difficulty ramps from 0 to full.
     private static let difficultyRampMeters: CGFloat = 150
+    /// The collapse's climb speed (points/s) at difficulty 0 and 1.
+    private static let chaseBaseSpeed: CGFloat = 40
+    private static let chaseMaxSpeed: CGFloat = 170
+    /// The collapse never falls further behind the ball than this many
+    /// screens — being good buys breathing room, never a pause.
+    private static let chaseMaxLag: CGFloat = 2.0
+    /// Head start (screens below the start) before the collapse arrives.
+    private static let chaseHeadStart: CGFloat = 1.1
 
     // MARK: - Scene lifecycle
 
@@ -309,6 +323,7 @@ final class GameScene: SKScene {
         maxHeight = runStartY
         startPosition = CGPoint(x: worldRect.midX, y: runStartY)
         nextBandY = runStartY + size.height * 0.55
+        chaseY = runStartY - size.height * GameScene.chaseHeadStart
 
         camera = cameraNode
         addChild(cameraNode)
@@ -316,6 +331,7 @@ final class GameScene: SKScene {
         addChild(wallsNode)
         rebuildWalls()
         setUpFloor()
+        setUpCollapse()
 
         // Ball and shadow return at the bottom.
         ballIsHere = true
@@ -424,6 +440,37 @@ final class GameScene: SKScene {
                 tile.xScale = even ? magnitude : -magnitude
             }
         }
+    }
+
+    /// The collapsed zone: darkness with a glowing crumble edge, sitting
+    /// above the floor and obstacles (they have fallen away underneath).
+    private func setUpCollapse() {
+        collapseNode.removeAllChildren()
+        collapseNode.zPosition = 7
+
+        let dark = SKSpriteNode(
+            color: SKColor(red: 0.05, green: 0.03, blue: 0.04, alpha: 1),
+            size: CGSize(width: size.width, height: size.height * 2.2)
+        )
+        dark.anchorPoint = CGPoint(x: 0.5, y: 1) // top edge at chaseY
+        collapseNode.addChild(dark)
+
+        let glow = SKSpriteNode(
+            color: SKColor(red: 0.90, green: 0.35, blue: 0.12, alpha: 0.5),
+            size: CGSize(width: size.width, height: 14)
+        )
+        glow.position = CGPoint(x: 0, y: -4)
+        collapseNode.addChild(glow)
+
+        let edge = SKSpriteNode(
+            color: SKColor(red: 1.0, green: 0.62, blue: 0.18, alpha: 0.95),
+            size: CGSize(width: size.width, height: 5)
+        )
+        edge.position = CGPoint(x: 0, y: -1)
+        collapseNode.addChild(edge)
+
+        collapseNode.position = CGPoint(x: size.width / 2, y: chaseY)
+        addChild(collapseNode)
     }
 
     /// Place one obstacle, with its silhouette shadow and a static physics
@@ -1004,6 +1051,27 @@ final class GameScene: SKScene {
             scoreLabel.text = "\(scoreMeters) m"
         }
 
+        // The floor collapses from below, faster the higher you are, and
+        // never drops more than a couple of screens behind — stalling is
+        // not a strategy. Swallowed means the run ends (or the phone
+        // underneath catches the falling ball).
+        if !isTransitioning {
+            let chaseDifficulty = min(1, max(0,
+                (ball.position.y - runStartY) / GameScene.pointsPerMeter
+                    / GameScene.difficultyRampMeters))
+            chaseY += (GameScene.chaseBaseSpeed
+                + (GameScene.chaseMaxSpeed - GameScene.chaseBaseSpeed)
+                    * chaseDifficulty) * dt
+            chaseY = max(chaseY,
+                         ball.position.y - size.height * GameScene.chaseMaxLag)
+            collapseNode.position = CGPoint(x: size.width / 2, y: chaseY)
+
+            if !isAirborne, !isFalling,
+               ball.position.y < chaseY + GameScene.ballRadius {
+                fallIntoVoid()
+            }
+        }
+
         // Over a chasm with no bridge under the ball: it falls. A hop
         // clears a chasm; right after a catch there's a moment of grace.
         if !isAirborne, !isFalling, !isTransitioning, !isDropGrace,
@@ -1430,6 +1498,8 @@ final class GameScene: SKScene {
     /// upstairs can be anything down here.
     private func safeLandingPoint(_ point: CGPoint) -> CGPoint {
         var point = point
+        // Above the collapse edge, always.
+        point.y = max(point.y, chaseY + GameScene.ballRadius * 3)
         for zone in voidZones where zone.rect.contains(point) {
             if let bridge = zone.bridges.min(by: {
                 abs($0.midX - point.x) < abs($1.midX - point.x)
