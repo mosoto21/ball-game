@@ -12,7 +12,10 @@ and catch it when it falls through a hole. Full concept in
 - ✅ **Milestone 2** — holes the ball can fall into.
 - ✅ **High-score mode** — an endless climb, generated as you go. Score is
   how far you climb (best saved on device); dying restarts the run with a
-  brand-new random course. Obstacle bands:
+  brand-new random course. Difficulty ramps over the first ~150 m:
+  bands pack tighter, bridges narrow, chasms deepen, bumpers multiply,
+  walls grow into chicanes, and guards appear behind hurdles and at
+  bridge exits. Obstacle bands:
   - **Hurdles** — amber chevron bars spanning the whole screen; the only
     way past is a hop (flick the phone up).
   - **Bumpers** — coral rings that fling the ball back hard.

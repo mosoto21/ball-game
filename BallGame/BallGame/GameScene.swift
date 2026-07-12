@@ -191,7 +191,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 37
+    private static let buildNumber = 38
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -248,6 +248,8 @@ final class GameScene: SKScene {
     private static let pointsPerMeter: CGFloat = 60
     /// How tall the endless world is (screens). Practically unreachable.
     private static let worldScreens: CGFloat = 300
+    /// Meters of climb over which the difficulty ramps from 0 to full.
+    private static let difficultyRampMeters: CGFloat = 150
 
     // MARK: - Scene lifecycle
 
@@ -490,33 +492,74 @@ final class GameScene: SKScene {
         return node
     }
 
-    /// Generate obstacle bands up to the given height, picking a random
-    /// pattern for each: a full-width hurdle (hop it!), a scatter of
-    /// bumpers, a chasm with a narrow bridge, or a wall-and-guard mix.
+    /// How hard the course is at the current generation height: 0 at the
+    /// start, 1 after difficultyRampMeters of climb. Everything scales
+    /// with it — band spacing, bridge width, chasm depth, obstacle count.
+    private var difficulty: CGFloat {
+        let climbed = (nextBandY - runStartY) / GameScene.pointsPerMeter
+        return min(1, max(0, climbed / GameScene.difficultyRampMeters))
+    }
+
+    private func lerp(_ from: CGFloat, _ to: CGFloat,
+                      _ t: CGFloat) -> CGFloat {
+        from + (to - from) * t
+    }
+
+    /// Generate obstacle bands up to the given height. Band types are
+    /// weighted by difficulty: the early climb is mostly hurdles and
+    /// loose bumpers, the high climb leans on chasms and walls, packed
+    /// tighter, with guards on the openings.
     private func generateBands(upTo targetY: CGFloat) {
         while nextBandY < min(targetY, worldRect.maxY - size.height) {
             let y = nextBandY
+            let d = difficulty
             var bandTop = y
             var nodes: [SKNode] = []
 
-            switch Int.random(in: 0..<4) {
+            // Weighted band pick: chasms and walls grow more common as
+            // the climb gets higher.
+            let weights: [(kind: Int, weight: CGFloat)] = [
+                (0, 1.0),            // hurdle
+                (1, 1.0),            // bumpers
+                (2, 0.4 + 0.9 * d),  // chasm
+                (3, 0.6 + 0.7 * d),  // wall
+            ]
+            var roll = CGFloat.random(
+                in: 0..<weights.reduce(0) { $0 + $1.weight })
+            var kind = weights[0].kind
+            for entry in weights {
+                if roll < entry.weight { kind = entry.kind; break }
+                roll -= entry.weight
+            }
+
+            switch kind {
             case 0:
                 nodes.append(spawnObstacle(
                     .hurdle(length: size.width * 1.02),
                     at: CGPoint(x: worldRect.midX, y: y)
                 ))
-            case 1:
-                for _ in 0..<Int.random(in: 2...3) {
+                // Higher up, a bumper lurks behind the hurdle to punish
+                // blind full-speed hops.
+                if d > 0.4, CGFloat.random(in: 0...1) < 0.45 {
                     nodes.append(spawnObstacle(.bumper, at: CGPoint(
-                        x: CGFloat.random(in: 0.15...0.85) * size.width,
-                        y: y + CGFloat.random(in: -0.12...0.12) * size.height
+                        x: CGFloat.random(in: 0.25...0.75) * size.width,
+                        y: y + size.height * 0.12
+                    )))
+                }
+            case 1:
+                let count = 2 + Int((d * 2.49).rounded(.down))
+                for _ in 0..<count {
+                    nodes.append(spawnObstacle(.bumper, at: CGPoint(
+                        x: CGFloat.random(in: 0.12...0.88) * size.width,
+                        y: y + CGFloat.random(in: -0.14...0.14) * size.height
                     )))
                 }
             case 2:
-                bandTop = y + spawnChasm(at: y)
+                bandTop = y + spawnChasm(at: y, difficulty: d)
             default:
                 let gapOnLeft = Bool.random()
-                let wallLength = size.width * CGFloat.random(in: 0.45...0.6)
+                let wallLength = size.width * CGFloat.random(
+                    in: lerp(0.40, 0.60, d)...lerp(0.50, 0.72, d))
                 let wallX = gapOnLeft
                     ? size.width - wallLength / 2 - 4
                     : wallLength / 2 + 4
@@ -533,22 +576,41 @@ final class GameScene: SKScene {
                     x: CGFloat.random(in: 0.25...0.75) * size.width,
                     y: y - size.height * 0.12
                 )))
+                // High up, a second wall on the other side turns the gap
+                // into a chicane.
+                if d > 0.5, CGFloat.random(in: 0...1) < 0.5 {
+                    let secondLength = size.width * CGFloat.random(in: 0.45...0.6)
+                    let secondX = gapOnLeft
+                        ? secondLength / 2 + 4
+                        : size.width - secondLength / 2 - 4
+                    let second = spawnObstacle(
+                        .wall(length: secondLength),
+                        at: CGPoint(x: secondX, y: y + size.height * 0.16)
+                    )
+                    nodes.append(second)
+                    bandTop = y + size.height * 0.16
+                }
             }
 
             if !nodes.isEmpty {
                 bandNodes.append((maxY: bandTop + 60, nodes: nodes))
             }
-            nextBandY = bandTop + size.height * CGFloat.random(in: 0.38...0.58)
+            nextBandY = bandTop + size.height * CGFloat.random(
+                in: lerp(0.55, 0.32, d)...lerp(0.75, 0.46, d))
         }
     }
 
-    /// A chasm across the whole screen with one narrow bridge. Rolling off
-    /// the bridge (while grounded) ends the run — unless a friend's phone
-    /// waits underneath to catch the ball. Returns the chasm's height.
-    private func spawnChasm(at y: CGFloat) -> CGFloat {
-        let voidHeight = size.height * CGFloat.random(in: 0.24...0.34)
+    /// A chasm across the whole screen with one narrow bridge — narrower
+    /// and deeper the higher you climb, sometimes with a bumper standing
+    /// guard at the far end. Rolling off the bridge (while grounded) ends
+    /// the run — unless a friend's phone waits underneath to catch the
+    /// ball. Returns the chasm's height.
+    private func spawnChasm(at y: CGFloat, difficulty d: CGFloat) -> CGFloat {
+        let voidHeight = size.height * CGFloat.random(
+            in: lerp(0.20, 0.30, d)...lerp(0.26, 0.38, d))
         let rect = CGRect(x: 0, y: y, width: worldRect.width, height: voidHeight)
-        let bridgeWidth = GameScene.ballRadius * CGFloat.random(in: 2.6...3.4)
+        let bridgeWidth = GameScene.ballRadius * CGFloat.random(
+            in: lerp(3.8, 2.2, d)...lerp(4.4, 2.8, d))
         let bridgeX = CGFloat.random(in: 0.18...0.82) * size.width
         let bridgeRect = CGRect(x: bridgeX - bridgeWidth / 2, y: rect.minY,
                                 width: bridgeWidth, height: voidHeight)
@@ -573,6 +635,15 @@ final class GameScene: SKScene {
         plank.zPosition = 3
         addChild(plank)
         nodes.append(plank)
+
+        // A guard at the bridge exit, high up.
+        if d > 0.6, CGFloat.random(in: 0...1) < 0.4 {
+            let guardOffset = bridgeX < size.width / 2 ? 60.0 : -60.0
+            nodes.append(spawnObstacle(.bumper, at: CGPoint(
+                x: min(max(bridgeX + guardOffset, 30), size.width - 30),
+                y: rect.maxY + size.height * 0.06
+            )))
+        }
 
         voidZones.append(VoidZone(rect: rect,
                                   bridges: [bridgeRect],
