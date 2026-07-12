@@ -10,40 +10,45 @@ and catch it when it falls through a hole. Full concept in
   and bounces off the screen edges. Flick the phone up and the ball hops
   (and can jump over holes); landings have haptics and dust effects.
 - ✅ **Milestone 2** — holes the ball can fall into.
-- ✅ **Adventure mode** — three hand-built courses on the deck: roll from
-  start to the glowing goal hole past geometric obstacles — slate
-  circles, teal bars, coral bumper rings (extra bouncy) — hopping over
-  trap holes (a hop also clears the low shapes); falling restarts the
-  level. Charcoal hazard-striped walls block the path and can't be
-  jumped. The shapes are placeholders: drop images named `prop_stone`,
-  `prop_branch`, `prop_mushroom`, `prop_fence` into the app bundle and
-  they replace the drawn art automatically (like `deck.png` does for the
-  floor).
+- ✅ **High-score mode** — an endless climb, generated as you go. Score is
+  how far you climb (best saved on device); dying restarts the run with a
+  brand-new random course. Obstacle bands:
+  - **Hurdles** — amber chevron bars spanning the whole screen; the only
+    way past is a hop (flick the phone up).
+  - **Bumpers** — coral rings that fling the ball back hard.
+  - **Chasms with narrow bridges** — a dark drop across the screen with
+    one plank; roll off the plank (while grounded) and the run ends. A
+    hop clears a chasm entirely — or a friend's phone underneath
+    catches the falling ball and the play continues on their screen.
+  - **Walls with guarded gaps** — charcoal hazard walls that can't be
+    jumped; a bumper guards the opening.
+  The geometric obstacles are placeholders: drop images named
+  `prop_stone`, `prop_branch`, `prop_mushroom`, `prop_hurdle`,
+  `prop_fence` into the app bundle and they replace the drawn art
+  automatically (like `deck.png` does for the floor).
 - ✅ **Ball skins** — color + pattern picker, paint your own skin on a 3D
-  ball, or wrap a photo from your library around it; skins scroll with
-  the roll and travel with the ball to the other phone.
-- ✅ **Paired courses** — every level is a *pair* of different layouts.
-  Connected phones automatically split them (course A / course B), so
-  where your course fences you in, the other phone's course is open:
-  drop through a hole to the phone below or roll off an edge to the
-  phone beside you to get past. Solo play uses course A, whose fences
-  always leave a guarded gap.
-- ✅ **Milestone 3** — ball rolls between two phones placed side by side.
+  ball, or put a photo from your library on it. Patterns scroll with the
+  roll; a painted/photo skin shows the whole picture on the ball's face
+  and spins as it rolls, so you can always tell what it is. Skins travel
+  with the ball to the other phone.
+- ✅ **Milestone 3** — ball rolls between two phones placed side by side
+  (entry height matches the sender's physical screen height).
 - ✅ **Milestone 4** — catch the falling ball with a phone underneath.
   The two phones sense their real physical arrangement over **UWB**
   (Nearby Interaction; requires two UWB iPhones — iPhone 11 or later,
   not SE/16e), exchanging discovery tokens over the Multipeer link and
   crossing the measured direction with gravity:
   - **Side by side** (or arrangement unknown) — the side walls open and
-    the ball rolls across the edges; holes stay normal traps, nothing
-    ever drops "down" to a phone that's actually beside you.
-  - **Stacked** (UWB says the peer is below, within 0.7 m) — holes send
-    the ball *through* the desk almost instantly, keeping its momentum,
-    onto the phone below. The lower phone can simply rest face up
-    (within ~30° of level); tipped over or face down misses and the ball
-    returns to the thrower. The landing spot is mapped in physical points
-    from the screen center, nudged clear of the lower course's own holes,
-    with a brief grace period so the ball can't fall straight back down.
+    the ball rolls across the edges; a chasm fall just ends the run,
+    nothing ever drops "down" to a phone that's actually beside you.
+  - **Stacked** (UWB says the peer is below, within 0.7 m) — a ball that
+    falls into a chasm drops *through* the deck almost instantly,
+    keeping its momentum, onto the phone below: the co-op rescue. The
+    lower phone can simply rest face up (within ~30° of level); tipped
+    over or face down misses and the ball returns near where it fell.
+    The landing spot is mapped in physical points from the screen
+    center, nudged onto safe ground on the receiving course, with a
+    brief grace period so the ball can't fall straight back down.
   The HUD shows what UWB sees live (↓ below / ↑ above / ↔ beside).
   Without UWB on both phones the game plays side-by-side only.
 - ✅ **Localization** — follows the device language like any international

@@ -143,14 +143,15 @@ struct MenuView: View {
                 VStack(spacing: 16) {
                     modeButton(
                         title: L10n.t("ひとりであそぶ", "Play Solo"),
-                        subtitle: L10n.t("コースをクリアしよう", "Clear the desk courses"),
+                        subtitle: L10n.t("どこまで登れる？ハイスコアにちょうせん",
+                                          "How far can you climb? Chase the high score"),
                         icon: "person.fill"
                     ) { onSelect(.solo) }
 
                     modeButton(
                         title: L10n.t("ふたりであそぶ", "Play Together"),
-                        subtitle: L10n.t("近くのiPhoneと自動でつながる\nよこにならべると はしからパス\nうえにかさねると 穴からボールが落ちてくる",
-                                          "Auto-connects to a nearby iPhone\nSide by side: pass across the edges\nStacked: the ball drops through holes"),
+                        subtitle: L10n.t("近くのiPhoneと自動でつながる\nよこにならべると はしからパス\nしたにかまえると 落ちたボールをキャッチ",
+                                          "Auto-connects to a nearby iPhone\nSide by side: pass across the edges\nHold one underneath: catch a falling ball"),
                         icon: "person.2.fill"
                     ) { onSelect(.multiplayer) }
                 }

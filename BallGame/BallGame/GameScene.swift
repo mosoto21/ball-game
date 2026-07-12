@@ -14,185 +14,36 @@ enum L10n {
     static func t(_ ja: String, _ en: String) -> String { isJapanese ? ja : en }
 }
 
-/// Adventure mode: hand-built garden courses on a wooden deck. Tilt to
-/// roll the ball from the start to the glowing goal hole, past stones,
-/// branches and mushrooms, without dropping into a trap hole. Flick the
-/// phone up to hop over traps and low objects — but not the tall fences:
-/// those you get past through the *other* phone's course, whose layout is
-/// different (drop through a hole to the phone below, or roll off an edge
-/// to the phone beside you).
+/// High-score mode: an endless climb up the deck. Tilt to roll, flick to
+/// hop. Bands of obstacles are generated as you go — full-width hurdles
+/// you must hop, round bumpers that fling the ball back, narrow bridges
+/// over chasms where falling ends the run. Score is how far you climbed;
+/// your best is saved. With a second phone, the ball still rolls across
+/// side edges, and a phone held underneath can catch a ball that falls
+/// into a chasm — the co-op safety net.
 final class GameScene: SKScene {
 
-    // MARK: - Level definitions
+    // MARK: - Endless course definitions
 
-    /// A garden object sitting on the deck. Stones, branches and mushrooms
-    /// are low — a hopping ball sails over them. Fences are tall walls the
-    /// ball can never jump; get past them through a gap, by dropping
-    /// through a hole to the other phone's course, or by rolling off the
-    /// edge onto it.
-    struct Prop {
-        enum Kind {
-            case stone, branch, mushroom
-            /// A tall fence wall; `width` is a fraction of one screen width.
-            case fence(width: CGFloat)
-        }
-        let kind: Kind
-        /// Position in normalized world coordinates (0...1 on each axis).
-        let position: CGPoint
-        var rotation: CGFloat = 0
+    /// One obstacle on the deck. Circles, bumpers, bars and hurdles are
+    /// low — a hopping ball sails over them (hurdles span the whole screen,
+    /// so hopping is the only way past). Walls are tall and can never be
+    /// jumped. Bumpers fling the ball back hard.
+    private enum Obstacle {
+        case circle
+        case bumper
+        case bar(length: CGFloat)
+        case hurdle(length: CGFloat)
+        case wall(length: CGFloat)
     }
 
-    /// One player's half of a level. Positions are normalized to the world
-    /// size so the same course plays on any screen size.
-    struct Course {
-        let start: CGPoint
-        let goal: CGPoint
-        let traps: [CGPoint]
-        let props: [Prop]
+    /// A chasm band: everywhere inside `rect` is a deadly drop except the
+    /// bridge strips crossing it.
+    private struct VoidZone {
+        let rect: CGRect
+        let bridges: [CGRect]
+        let nodes: [SKNode]
     }
-
-    /// A level is a *pair* of different courses. Connected phones each get
-    /// one (decided by the connection tie-break); where your course walls
-    /// you in, the other course is open — drop through a hole or roll off
-    /// an edge to borrow it. Solo play uses course A.
-    struct Level {
-        let screensWide: Int
-        let screensTall: Int
-        let courseA: Course
-        let courseB: Course
-    }
-
-    private static let levels: [Level] = [
-        // Level 1 — one fence each, gaps on opposite sides: learn that the
-        // other course is open where yours is blocked.
-        Level(
-            screensWide: 1, screensTall: 2,
-            courseA: Course(
-                start: CGPoint(x: 0.5, y: 0.08),
-                goal: CGPoint(x: 0.5, y: 0.92),
-                traps: [
-                    CGPoint(x: 0.5, y: 0.30),
-                    CGPoint(x: 0.30, y: 0.62),
-                ],
-                props: [
-                    Prop(kind: .fence(width: 0.62), position: CGPoint(x: 0.31, y: 0.42)),
-                    Prop(kind: .mushroom, position: CGPoint(x: 0.80, y: 0.46)),
-                    Prop(kind: .stone, position: CGPoint(x: 0.60, y: 0.66)),
-                    Prop(kind: .branch, position: CGPoint(x: 0.35, y: 0.80), rotation: 0.5),
-                ]
-            ),
-            courseB: Course(
-                start: CGPoint(x: 0.5, y: 0.08),
-                goal: CGPoint(x: 0.5, y: 0.92),
-                traps: [
-                    CGPoint(x: 0.5, y: 0.44),
-                    CGPoint(x: 0.72, y: 0.75),
-                ],
-                props: [
-                    Prop(kind: .fence(width: 0.62), position: CGPoint(x: 0.69, y: 0.55)),
-                    Prop(kind: .mushroom, position: CGPoint(x: 0.18, y: 0.58)),
-                    Prop(kind: .stone, position: CGPoint(x: 0.30, y: 0.30)),
-                    Prop(kind: .branch, position: CGPoint(x: 0.60, y: 0.20), rotation: -0.4),
-                    Prop(kind: .stone, position: CGPoint(x: 0.75, y: 0.86)),
-                ]
-            )
-        ),
-        // Level 2 — zigzag fences, mirrored between the two courses, with
-        // mushroom bumpers guarding the gaps.
-        Level(
-            screensWide: 1, screensTall: 2,
-            courseA: Course(
-                start: CGPoint(x: 0.2, y: 0.08),
-                goal: CGPoint(x: 0.8, y: 0.93),
-                traps: [
-                    CGPoint(x: 0.85, y: 0.24),
-                    CGPoint(x: 0.5, y: 0.50),
-                    CGPoint(x: 0.25, y: 0.78),
-                ],
-                props: [
-                    Prop(kind: .fence(width: 0.7), position: CGPoint(x: 0.35, y: 0.32)),
-                    Prop(kind: .fence(width: 0.7), position: CGPoint(x: 0.65, y: 0.68)),
-                    Prop(kind: .mushroom, position: CGPoint(x: 0.88, y: 0.40)),
-                    Prop(kind: .mushroom, position: CGPoint(x: 0.12, y: 0.60)),
-                    Prop(kind: .stone, position: CGPoint(x: 0.50, y: 0.57)),
-                    Prop(kind: .branch, position: CGPoint(x: 0.60, y: 0.12), rotation: 1.0),
-                    Prop(kind: .branch, position: CGPoint(x: 0.40, y: 0.85), rotation: -0.7),
-                ]
-            ),
-            courseB: Course(
-                start: CGPoint(x: 0.8, y: 0.08),
-                goal: CGPoint(x: 0.2, y: 0.93),
-                traps: [
-                    CGPoint(x: 0.15, y: 0.24),
-                    CGPoint(x: 0.5, y: 0.52),
-                    CGPoint(x: 0.75, y: 0.78),
-                ],
-                props: [
-                    Prop(kind: .fence(width: 0.7), position: CGPoint(x: 0.65, y: 0.32)),
-                    Prop(kind: .fence(width: 0.7), position: CGPoint(x: 0.35, y: 0.68)),
-                    Prop(kind: .mushroom, position: CGPoint(x: 0.12, y: 0.40)),
-                    Prop(kind: .mushroom, position: CGPoint(x: 0.88, y: 0.60)),
-                    Prop(kind: .stone, position: CGPoint(x: 0.45, y: 0.44)),
-                    Prop(kind: .branch, position: CGPoint(x: 0.30, y: 0.14), rotation: -1.0),
-                    Prop(kind: .branch, position: CGPoint(x: 0.70, y: 0.88), rotation: 0.6),
-                ]
-            )
-        ),
-        // Level 3 — a wide garden trek; the fence maze differs completely
-        // between the two courses.
-        Level(
-            screensWide: 2, screensTall: 2,
-            courseA: Course(
-                start: CGPoint(x: 0.08, y: 0.10),
-                goal: CGPoint(x: 0.92, y: 0.90),
-                traps: [
-                    CGPoint(x: 0.30, y: 0.22),
-                    CGPoint(x: 0.60, y: 0.38),
-                    CGPoint(x: 0.20, y: 0.60),
-                    CGPoint(x: 0.55, y: 0.78),
-                    CGPoint(x: 0.85, y: 0.60),
-                ],
-                props: [
-                    Prop(kind: .fence(width: 0.5), position: CGPoint(x: 0.25, y: 0.30)),
-                    Prop(kind: .fence(width: 0.5), position: CGPoint(x: 0.75, y: 0.45)),
-                    Prop(kind: .fence(width: 0.6), position: CGPoint(x: 0.40, y: 0.70)),
-                    Prop(kind: .stone, position: CGPoint(x: 0.45, y: 0.15)),
-                    Prop(kind: .stone, position: CGPoint(x: 0.70, y: 0.55)),
-                    Prop(kind: .stone, position: CGPoint(x: 0.15, y: 0.45)),
-                    Prop(kind: .mushroom, position: CGPoint(x: 0.50, y: 0.30)),
-                    Prop(kind: .mushroom, position: CGPoint(x: 0.85, y: 0.75)),
-                    Prop(kind: .mushroom, position: CGPoint(x: 0.10, y: 0.80)),
-                    Prop(kind: .branch, position: CGPoint(x: 0.65, y: 0.20), rotation: -0.5),
-                    Prop(kind: .branch, position: CGPoint(x: 0.35, y: 0.55), rotation: 0.9),
-                    Prop(kind: .branch, position: CGPoint(x: 0.80, y: 0.30), rotation: 1.2),
-                ]
-            ),
-            courseB: Course(
-                start: CGPoint(x: 0.10, y: 0.08),
-                goal: CGPoint(x: 0.90, y: 0.92),
-                traps: [
-                    CGPoint(x: 0.75, y: 0.18),
-                    CGPoint(x: 0.40, y: 0.42),
-                    CGPoint(x: 0.65, y: 0.60),
-                    CGPoint(x: 0.25, y: 0.80),
-                ],
-                props: [
-                    Prop(kind: .fence(width: 0.5), position: CGPoint(x: 0.70, y: 0.25)),
-                    Prop(kind: .fence(width: 0.6), position: CGPoint(x: 0.30, y: 0.50)),
-                    Prop(kind: .fence(width: 0.5), position: CGPoint(x: 0.65, y: 0.75)),
-                    Prop(kind: .stone, position: CGPoint(x: 0.20, y: 0.25)),
-                    Prop(kind: .stone, position: CGPoint(x: 0.55, y: 0.55)),
-                    Prop(kind: .stone, position: CGPoint(x: 0.85, y: 0.45)),
-                    Prop(kind: .mushroom, position: CGPoint(x: 0.35, y: 0.15)),
-                    Prop(kind: .mushroom, position: CGPoint(x: 0.90, y: 0.65)),
-                    Prop(kind: .mushroom, position: CGPoint(x: 0.15, y: 0.60)),
-                    Prop(kind: .branch, position: CGPoint(x: 0.50, y: 0.30), rotation: 0.4),
-                    Prop(kind: .branch, position: CGPoint(x: 0.75, y: 0.85), rotation: -0.8),
-                    Prop(kind: .branch, position: CGPoint(x: 0.30, y: 0.68), rotation: 1.3),
-                ]
-            )
-        ),
-    ]
 
     // MARK: - Nodes & state
 
@@ -206,15 +57,33 @@ final class GameScene: SKScene {
     private let cameraNode = SKCameraNode()
     private var lastUpdateTime: TimeInterval?
 
-    /// The full playing field; larger than one screen.
+    /// The full playing field; one screen wide, hundreds tall.
     private var worldRect: CGRect = .zero
-    private var levelIndex = 0
     private var startPosition = CGPoint.zero
-    private var goalPosition = CGPoint.zero
-    /// Trap holes currently on the floor.
-    private var holes: [SKSpriteNode] = []
     /// Obstacles currently on the floor (used to keep drop landings clear).
     private var propNodes: [SKSpriteNode] = []
+    /// Chasm bands currently active.
+    private var voidZones: [VoidZone] = []
+    /// Obstacle bands, tagged with the height above which they were
+    /// spawned, so bands far below the ball can be torn down.
+    private var bandNodes: [(maxY: CGFloat, nodes: [SKNode])] = []
+    /// Where the next obstacle band will be generated.
+    private var nextBandY: CGFloat = 0
+
+    // Score: how high the ball has climbed this run.
+    private var runStartY: CGFloat = 0
+    private var maxHeight: CGFloat = 0
+    private var bestScore = UserDefaults.standard.integer(forKey: "bestScore")
+    private let scoreLabel = SKLabelNode()
+    private let bestLabel = SKLabelNode()
+    private var scoreMeters: Int {
+        max(0, Int((maxHeight - runStartY) / GameScene.pointsPerMeter))
+    }
+
+    // Endless floor: a handful of tiles recycled as the camera climbs.
+    private var floorTiles: [SKSpriteNode] = []
+    private var floorTileHeight: CGFloat = 0
+    private var floorMirrors = false
 
     // Physics categories: a hopping ball clears low garden objects but
     // never the tall fences or the world walls.
@@ -322,7 +191,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 35
+    private static let buildNumber = 36
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -375,6 +244,10 @@ final class GameScene: SKScene {
     private static let dropResultTimeout: TimeInterval = 4.0
     /// Grid spacing of the dots on the ball's surface.
     private static let dotSpacing: CGFloat = 19
+    /// Points of climb per scored "meter".
+    private static let pointsPerMeter: CGFloat = 60
+    /// How tall the endless world is (screens). Practically unreachable.
+    private static let worldScreens: CGFloat = 300
 
     // MARK: - Scene lifecycle
 
@@ -390,7 +263,7 @@ final class GameScene: SKScene {
         motion.startAccelerometerUpdates() // fallback source
 
         buildBallIfNeeded()
-        loadLevel(levelIndex)
+        startRun()
 
         multipeer.onMessage = { [weak self] message in
             switch message {
@@ -408,21 +281,19 @@ final class GameScene: SKScene {
         }
     }
 
-    /// Which of the level's two courses this phone plays: solo always gets
-    /// course A; connected phones split A/B by the connection tie-break so
-    /// the two screens always show different layouts.
-    private func activeCourse(of level: Level) -> Course {
-        (peerConnected && !multipeer.isPrimary) ? level.courseB : level.courseA
-    }
-
-    /// Tear down the old course and build the new one. The ball, shadow and
-    /// camera are re-added each time; everything else is created fresh.
-    private func loadLevel(_ index: Int) {
+    /// Tear down everything and start a fresh run from height zero. The
+    /// obstacle course is generated randomly as the ball climbs, so every
+    /// run — and every phone — gets its own layout.
+    private func startRun() {
         removeAllActions()
         removeAllChildren()
         cameraNode.removeAllChildren()
-        holes.removeAll()
+        scoreLabel.removeFromParent()
+        bestLabel.removeFromParent()
         propNodes.removeAll()
+        voidZones.removeAll()
+        bandNodes.removeAll()
+        floorTiles.removeAll()
         isAirborne = false
         isFalling = false
         isTransitioning = false
@@ -430,33 +301,21 @@ final class GameScene: SKScene {
         isDropGrace = false
         lastUpdateTime = nil
 
-        let level = GameScene.levels[index]
-        let course = activeCourse(of: level)
-        worldRect = CGRect(
-            x: 0, y: 0,
-            width: size.width * CGFloat(level.screensWide),
-            height: size.height * CGFloat(level.screensTall)
-        )
-        startPosition = denormalize(course.start)
-        goalPosition = denormalize(course.goal)
+        worldRect = CGRect(x: 0, y: 0, width: size.width,
+                           height: size.height * GameScene.worldScreens)
+        runStartY = size.height * 0.3
+        maxHeight = runStartY
+        startPosition = CGPoint(x: worldRect.midX, y: runStartY)
+        nextBandY = runStartY + size.height * 0.55
 
         camera = cameraNode
         addChild(cameraNode)
 
-        setUpBackground(level: level)
-
         addChild(wallsNode)
         rebuildWalls()
+        setUpFloor()
 
-        for trap in course.traps {
-            addTrap(at: denormalize(trap))
-        }
-        addGoal(at: goalPosition)
-        for prop in course.props {
-            addProp(prop)
-        }
-
-        // Ball and shadow return at the level's start.
+        // Ball and shadow return at the bottom.
         ballIsHere = true
         ball.isHidden = false
         shadow.isHidden = false
@@ -474,8 +333,10 @@ final class GameScene: SKScene {
         shadow.position = startPosition
         addChild(shadow)
 
-        setUpHUD(levelNumber: index + 1)
+        setUpHUD()
         followBallWithCamera()
+        layoutFloorTiles()
+        generateBands(upTo: cameraNode.position.y + size.height * 1.8)
     }
 
     /// A full wall loop normally; with a peer connected side by side the
@@ -507,139 +368,106 @@ final class GameScene: SKScene {
         }
     }
 
-    private func denormalize(_ point: CGPoint) -> CGPoint {
-        CGPoint(
-            x: worldRect.minX + point.x * worldRect.width,
-            y: worldRect.minY + point.y * worldRect.height
-        )
-    }
+    // MARK: - Endless floor & obstacle generation
 
-    // MARK: - Course construction
-
-    /// The deck floor. Uses the real pallet photo (deck.png) rotated 90° so
-    /// the slats run vertically, mirror-tiled across the world so the seams
-    /// between repeats line up. Falls back to the code-drawn wood if the
-    /// photo is missing from the bundle.
-    private func setUpBackground(level: Level) {
+    /// The deck floor: a few tiles (the real deck.png photo when present,
+    /// otherwise code-drawn wood) recycled vertically as the camera climbs,
+    /// so an endless world never needs more than a handful of nodes.
+    private func setUpFloor() {
         if let photo = UIImage(named: "deck") {
-            tilePhotoBackground(photo)
-        } else {
-            tileProceduralBackground(level: level)
-        }
-    }
-
-    private func tilePhotoBackground(_ photo: UIImage) {
-        let texture = SKTexture(image: photo)
-        // Rotated 90°, the photo's height becomes the on-screen width.
-        // Scale so one tile spans exactly one screen width.
-        let scale = size.width / photo.size.height
-        let tileWidth = size.width
-        let tileHeight = photo.size.width * scale
-
-        let columns = Int(ceil(worldRect.width / tileWidth))
-        let rows = Int(ceil(worldRect.height / tileHeight))
-        for column in 0..<columns {
-            for row in 0..<rows {
+            let texture = SKTexture(image: photo)
+            // Rotated 90°, the photo's height becomes the on-screen width.
+            let scale = size.width / photo.size.height
+            floorTileHeight = photo.size.width * scale
+            floorMirrors = true
+            let count = Int(ceil(size.height / floorTileHeight)) + 3
+            for _ in 0..<count {
                 let tile = SKSpriteNode(texture: texture)
                 tile.zRotation = .pi / 2
-                // Mirror alternate tiles so shared edges match seamlessly.
-                // After the 90° rotation, the node's y axis lies along the
-                // world's x axis and vice versa.
-                tile.yScale = scale * (column % 2 == 0 ? 1 : -1)
-                tile.xScale = scale * (row % 2 == 0 ? 1 : -1)
-                tile.position = CGPoint(
-                    x: tileWidth * (CGFloat(column) + 0.5),
-                    y: tileHeight * (CGFloat(row) + 0.5)
-                )
+                tile.yScale = scale
+                tile.xScale = scale
                 tile.zPosition = 0
                 addChild(tile)
+                floorTiles.append(tile)
             }
-        }
-    }
-
-    private func tileProceduralBackground(level: Level) {
-        let tileSize = size
-        let texture = GameScene.woodTexture(size: tileSize)
-        for column in 0..<level.screensWide {
-            for row in 0..<level.screensTall {
+        } else {
+            let texture = GameScene.woodTexture(size: size)
+            floorTileHeight = size.height
+            floorMirrors = false
+            for _ in 0..<3 {
                 let tile = SKSpriteNode(texture: texture)
-                tile.position = CGPoint(
-                    x: tileSize.width * (CGFloat(column) + 0.5),
-                    y: tileSize.height * (CGFloat(row) + 0.5)
-                )
                 tile.zPosition = 0
                 addChild(tile)
+                floorTiles.append(tile)
+            }
+        }
+        layoutFloorTiles()
+    }
+
+    /// Slide the floor tiles to the rows around the camera. Alternate rows
+    /// of the photo are mirrored so the seams line up.
+    private func layoutFloorTiles() {
+        guard floorTileHeight > 0 else { return }
+        let firstRow = Int(floor(
+            (cameraNode.position.y - size.height) / floorTileHeight))
+        for (offset, tile) in floorTiles.enumerated() {
+            let row = firstRow + offset
+            tile.position = CGPoint(
+                x: size.width / 2,
+                y: (CGFloat(row) + 0.5) * floorTileHeight
+            )
+            if floorMirrors {
+                let magnitude = abs(tile.xScale)
+                let even = ((row % 2) + 2) % 2 == 0
+                tile.xScale = even ? magnitude : -magnitude
             }
         }
     }
 
-    private func addTrap(at position: CGPoint) {
-        let hole = SKSpriteNode(texture: GameScene.holeTexture(radius: GameScene.holeRadius))
-        hole.position = position
-        hole.zPosition = 2
-        addChild(hole)
-        holes.append(hole)
-    }
-
-    /// The goal: a hole ringed with pulsing golden light.
-    private func addGoal(at position: CGPoint) {
-        let hole = SKSpriteNode(texture: GameScene.holeTexture(radius: GameScene.holeRadius))
-        hole.position = position
-        hole.zPosition = 2
-        addChild(hole)
-
-        let glow = SKShapeNode(circleOfRadius: GameScene.holeRadius + 5)
-        glow.fillColor = .clear
-        glow.strokeColor = SKColor(red: 1.0, green: 0.82, blue: 0.35, alpha: 0.9)
-        glow.lineWidth = 4
-        glow.glowWidth = 6
-        glow.position = position
-        glow.zPosition = 3
-        addChild(glow)
-
-        let pulse = SKAction.sequence([
-            .group([.scale(to: 1.12, duration: 0.7), .fadeAlpha(to: 0.55, duration: 0.7)]),
-            .group([.scale(to: 1.0, duration: 0.7), .fadeAlpha(to: 0.9, duration: 0.7)]),
-        ])
-        pulse.timingMode = .easeInEaseOut
-        glow.run(.repeatForever(pulse))
-    }
-
-    /// Place a garden object with its texture, silhouette shadow, and a
-    /// static physics body so the ball bounces off it. Low objects live in
-    /// lowPropCategory (a hop clears them); fences are fenceCategory.
-    private func addProp(_ prop: Prop) {
+    /// Place one obstacle, with its silhouette shadow and a static physics
+    /// body. Low obstacles live in lowPropCategory (a hop clears them);
+    /// walls are fenceCategory and can never be jumped.
+    @discardableResult
+    private func spawnObstacle(_ kind: Obstacle, at point: CGPoint,
+                               rotation: CGFloat = 0) -> SKSpriteNode {
         let texture: SKTexture
         let body: SKPhysicsBody
         var restitution: CGFloat = 0.4
         var category = GameScene.lowPropCategory
 
-        switch prop.kind {
-        case .stone:
+        switch kind {
+        case .circle:
             texture = GameScene.stoneTexture()
             body = SKPhysicsBody(circleOfRadius: texture.size().width * 0.46)
-            restitution = 0.3 // dead rock: kills most of the bounce
-        case .branch:
-            texture = GameScene.branchTexture()
+            restitution = 0.3 // dead stop: kills most of the bounce
+        case .bumper:
+            texture = GameScene.mushroomTexture()
+            body = SKPhysicsBody(circleOfRadius: texture.size().width * 0.46)
+            restitution = 0.95 // flings the ball right back
+        case .bar(let length):
+            texture = GameScene.barTexture(length: length)
             body = SKPhysicsBody(rectangleOf: CGSize(
-                width: texture.size().width * 0.94,
+                width: length * 0.96,
                 height: texture.size().height * 0.7
             ))
             restitution = 0.45
-        case .mushroom:
-            texture = GameScene.mushroomTexture()
-            body = SKPhysicsBody(circleOfRadius: texture.size().width * 0.46)
-            restitution = 0.9 // springy cap: the garden's bumper
-        case .fence(let width):
-            texture = GameScene.fenceTexture(length: width * size.width)
+        case .hurdle(let length):
+            texture = GameScene.hurdleTexture(length: length)
+            body = SKPhysicsBody(rectangleOf: CGSize(
+                width: length,
+                height: texture.size().height * 0.7
+            ))
+            restitution = 0.5
+        case .wall(let length):
+            texture = GameScene.fenceTexture(length: length)
             body = SKPhysicsBody(rectangleOf: texture.size())
             restitution = 0.35
             category = GameScene.fenceCategory
         }
 
         let node = SKSpriteNode(texture: texture)
-        node.position = denormalize(prop.position)
-        node.zRotation = prop.rotation
+        node.position = point
+        node.zRotation = rotation
         node.zPosition = 6
 
         // Silhouette drop shadow so the object sits above the deck.
@@ -659,16 +487,130 @@ final class GameScene: SKScene {
 
         addChild(node)
         propNodes.append(node)
+        return node
     }
 
-    private func setUpHUD(levelNumber: Int) {
-        let levelLabel = SKLabelNode(text: "LEVEL \(levelNumber)")
-        levelLabel.fontName = "AvenirNext-Bold"
-        levelLabel.fontSize = 20
-        levelLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.7)
-        levelLabel.position = CGPoint(x: 0, y: size.height / 2 - 70)
-        levelLabel.zPosition = 100
-        cameraNode.addChild(levelLabel)
+    /// Generate obstacle bands up to the given height, picking a random
+    /// pattern for each: a full-width hurdle (hop it!), a scatter of
+    /// bumpers, a chasm with a narrow bridge, or a wall-and-guard mix.
+    private func generateBands(upTo targetY: CGFloat) {
+        while nextBandY < min(targetY, worldRect.maxY - size.height) {
+            let y = nextBandY
+            var bandTop = y
+            var nodes: [SKNode] = []
+
+            switch Int.random(in: 0..<4) {
+            case 0:
+                nodes.append(spawnObstacle(
+                    .hurdle(length: size.width * 1.02),
+                    at: CGPoint(x: worldRect.midX, y: y)
+                ))
+            case 1:
+                for _ in 0..<Int.random(in: 2...3) {
+                    nodes.append(spawnObstacle(.bumper, at: CGPoint(
+                        x: CGFloat.random(in: 0.15...0.85) * size.width,
+                        y: y + CGFloat.random(in: -0.12...0.12) * size.height
+                    )))
+                }
+            case 2:
+                bandTop = y + spawnChasm(at: y)
+            default:
+                let gapOnLeft = Bool.random()
+                let wallLength = size.width * CGFloat.random(in: 0.45...0.6)
+                let wallX = gapOnLeft
+                    ? size.width - wallLength / 2 - 4
+                    : wallLength / 2 + 4
+                nodes.append(spawnObstacle(
+                    .wall(length: wallLength),
+                    at: CGPoint(x: wallX, y: y)
+                ))
+                // A bumper guards the gap; a circle litters the approach.
+                nodes.append(spawnObstacle(.bumper, at: CGPoint(
+                    x: gapOnLeft ? size.width * 0.16 : size.width * 0.84,
+                    y: y + size.height * 0.08
+                )))
+                nodes.append(spawnObstacle(.circle, at: CGPoint(
+                    x: CGFloat.random(in: 0.25...0.75) * size.width,
+                    y: y - size.height * 0.12
+                )))
+            }
+
+            if !nodes.isEmpty {
+                bandNodes.append((maxY: bandTop + 60, nodes: nodes))
+            }
+            nextBandY = bandTop + size.height * CGFloat.random(in: 0.38...0.58)
+        }
+    }
+
+    /// A chasm across the whole screen with one narrow bridge. Rolling off
+    /// the bridge (while grounded) ends the run — unless a friend's phone
+    /// waits underneath to catch the ball. Returns the chasm's height.
+    private func spawnChasm(at y: CGFloat) -> CGFloat {
+        let voidHeight = size.height * CGFloat.random(in: 0.24...0.34)
+        let rect = CGRect(x: 0, y: y, width: worldRect.width, height: voidHeight)
+        let bridgeWidth = GameScene.ballRadius * CGFloat.random(in: 2.6...3.4)
+        let bridgeX = CGFloat.random(in: 0.18...0.82) * size.width
+        let bridgeRect = CGRect(x: bridgeX - bridgeWidth / 2, y: rect.minY,
+                                width: bridgeWidth, height: voidHeight)
+
+        var nodes: [SKNode] = []
+
+        // The dark drop.
+        let chasm = SKShapeNode(rect: rect)
+        chasm.fillColor = SKColor(red: 0.05, green: 0.04, blue: 0.05, alpha: 1)
+        chasm.strokeColor = SKColor(red: 0.16, green: 0.12, blue: 0.10, alpha: 1)
+        chasm.lineWidth = 3
+        chasm.zPosition = 2
+        addChild(chasm)
+        nodes.append(chasm)
+
+        // The bridge plank.
+        let plank = SKShapeNode(rect: bridgeRect.insetBy(dx: 2, dy: 0),
+                                cornerRadius: 6)
+        plank.fillColor = SKColor(red: 0.80, green: 0.66, blue: 0.46, alpha: 1)
+        plank.strokeColor = SKColor(red: 0.55, green: 0.42, blue: 0.28, alpha: 1)
+        plank.lineWidth = 3
+        plank.zPosition = 3
+        addChild(plank)
+        nodes.append(plank)
+
+        voidZones.append(VoidZone(rect: rect,
+                                  bridges: [bridgeRect],
+                                  nodes: nodes))
+        return voidHeight
+    }
+
+    /// Tear down bands and chasms that have fallen far below the ball.
+    private func pruneBands(below y: CGFloat) {
+        bandNodes.removeAll { band in
+            guard band.maxY < y else { return false }
+            band.nodes.forEach { $0.removeFromParent() }
+            return true
+        }
+        voidZones.removeAll { zone in
+            guard zone.rect.maxY < y else { return false }
+            zone.nodes.forEach { $0.removeFromParent() }
+            return true
+        }
+        propNodes.removeAll { $0.parent == nil }
+    }
+
+    private func setUpHUD() {
+        scoreLabel.text = "0 m"
+        scoreLabel.fontName = "AvenirNext-Bold"
+        scoreLabel.fontSize = 30
+        scoreLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.85)
+        scoreLabel.position = CGPoint(x: 0, y: size.height / 2 - 70)
+        scoreLabel.zPosition = 100
+        cameraNode.addChild(scoreLabel)
+
+        bestLabel.text = L10n.t("ベスト \(bestScore) m", "BEST \(bestScore) m")
+        bestLabel.fontName = "AvenirNext-DemiBold"
+        bestLabel.fontSize = 14
+        bestLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.55)
+        bestLabel.position = CGPoint(x: 0, y: size.height / 2 - 92)
+        bestLabel.zPosition = 100
+        cameraNode.addChild(bestLabel)
 
         let buildLabel = SKLabelNode(text: "build \(GameScene.buildNumber)")
         buildLabel.fontName = "Menlo"
@@ -808,21 +750,14 @@ final class GameScene: SKScene {
             isCustomSkin = true
             ball.fillColor = .white // shows through erased/transparent areas
             dotPattern.removeAllChildren()
-            // Tile the drawing 3×3 with a period of one ball diameter, so the
-            // scroller can wrap it like the dot pattern: the drawing slides
-            // off one side and returns from the other — reads as the ball
-            // rolling in any direction, vertical included.
-            let texture = SKTexture(image: skin)
+            // One sprite covering the whole face of the ball: the entire
+            // picture stays visible and spins with the roll (see
+            // scrollSurfacePattern), so you can always tell what it is —
+            // tiling and scrolling only ever showed a moving crop.
+            let sprite = SKSpriteNode(texture: SKTexture(image: skin))
             let diameter = GameScene.ballRadius * 2
-            for column in -1...1 {
-                for row in -1...1 {
-                    let sprite = SKSpriteNode(texture: texture)
-                    sprite.size = CGSize(width: diameter, height: diameter)
-                    sprite.position = CGPoint(x: CGFloat(column) * diameter,
-                                              y: CGFloat(row) * diameter)
-                    dotPattern.addChild(sprite)
-                }
-            }
+            sprite.size = CGSize(width: diameter, height: diameter)
+            dotPattern.addChild(sprite)
             return
         }
 
@@ -901,10 +836,8 @@ final class GameScene: SKScene {
         guard let body = ball.physicsBody else { return }
 
 
-        // Track the connection: start/stop UWB ranging and rebuild the
-        // level, because connecting (or losing the peer) switches which of
-        // the level's two courses this phone plays. The reload also brings
-        // a visiting ball home.
+        // Track the connection: start/stop UWB ranging. Losing the peer
+        // while the ball is visiting starts a fresh run.
         if multipeer.isConnected != peerConnected {
             peerConnected = multipeer.isConnected
             if peerConnected {
@@ -913,9 +846,11 @@ final class GameScene: SKScene {
                 nearby.stop()
             }
             removeAction(forKey: "dropTimeout")
-            loadLevel(levelIndex)
             updateConnectionLabel()
-            return
+            if !peerConnected, !ballIsHere {
+                startRun()
+                return
+            }
         }
 
         // The arrangement is live: follow it frame to frame. Side passing
@@ -954,29 +889,25 @@ final class GameScene: SKScene {
             return
         }
 
-        if !isAirborne, !isFalling, !isTransitioning {
-            // Reaching the goal wins the level.
-            let goalDistance = hypot(
-                ball.position.x - goalPosition.x,
-                ball.position.y - goalPosition.y
-            )
-            if goalDistance < GameScene.holeRadius * 0.8 {
-                reachGoal()
-            } else if !isDropGrace {
-                // A grounded ball rolling over a trap falls in; a hopping
-                // ball sails right over. A just-caught ball gets a moment
-                // of immunity so it can't fall straight back down.
-                for hole in holes {
-                    let distance = hypot(
-                        ball.position.x - hole.position.x,
-                        ball.position.y - hole.position.y
-                    )
-                    if distance < GameScene.holeRadius * 0.8 {
-                        fall(into: hole)
-                        break
-                    }
-                }
-            }
+        // Keep the endless course rolling: build ahead of the camera,
+        // tear down what has fallen far behind.
+        generateBands(upTo: cameraNode.position.y + size.height * 1.8)
+        pruneBands(below: ball.position.y - size.height * 2)
+
+        // Score is the highest point reached this run.
+        if ball.position.y > maxHeight {
+            maxHeight = ball.position.y
+            scoreLabel.text = "\(scoreMeters) m"
+        }
+
+        // Over a chasm with no bridge under the ball: it falls. A hop
+        // clears a chasm; right after a catch there's a moment of grace.
+        if !isAirborne, !isFalling, !isTransitioning, !isDropGrace,
+           let zone = voidZones.first(where: { $0.rect.contains(ball.position) }),
+           !zone.bridges.contains(where: {
+               $0.insetBy(dx: -6, dy: -6).contains(ball.position)
+           }) {
+            fallIntoVoid()
         }
 
         // While airborne the ball keeps its launch velocity — you can't
@@ -1020,6 +951,7 @@ final class GameScene: SKScene {
 
         scrollSurfacePattern(velocity: body.velocity, dt: dt)
         followBallWithCamera()
+        layoutFloorTiles()
     }
 
     /// Keep the ball in view, clamping so the camera never shows past the
@@ -1033,13 +965,18 @@ final class GameScene: SKScene {
         )
     }
 
-    /// Seen from above, a rolling ball's top surface moves in the direction of
-    /// travel — scroll the dots with the velocity and wrap them so the pattern
-    /// never runs out.
+    /// Seen from above, a rolling ball's top surface moves in the direction
+    /// of travel — scroll the dots with the velocity and wrap them so the
+    /// pattern never runs out. A picture can't tile, so a custom skin spins
+    /// in place instead: the whole image stays visible, clearly rolling.
     private func scrollSurfacePattern(velocity: CGVector, dt: CGFloat) {
-        // Painted skins wrap with a period of one diameter (one full "turn");
-        // the built-in patterns repeat every dotSpacing.
-        let spacing = isCustomSkin ? GameScene.ballRadius * 2 : GameScene.dotSpacing
+        if isCustomSkin {
+            let spin = (velocity.dx + velocity.dy) * dt
+                / (GameScene.ballRadius * 2)
+            dotPattern.zRotation -= spin
+            return
+        }
+        let spacing = GameScene.dotSpacing
         var position = dotPattern.position
         position.x += velocity.dx * dt * 0.8
         position.y += velocity.dy * dt * 0.8
@@ -1151,67 +1088,92 @@ final class GameScene: SKScene {
         }
     }
 
-    // MARK: - Falling & winning
+    // MARK: - Falling & run over
 
-    /// The ball rolled over a trap. When UWB says the other phone is
+    /// The ball rolled off a bridge. When UWB says the other phone is
     /// physically below this one right now, the ball falls *through* the
-    /// desk toward it (Milestone 4); everywhere else it's swallowed and
-    /// the level restarts.
-    private func fall(into hole: SKSpriteNode) {
+    /// deck toward it — the co-op rescue; otherwise the run ends.
+    private func fallIntoVoid() {
         if peerConnected, peerPlacement == .below,
            nearby.distance ?? 0 < GameScene.maxDropDistance {
-            dropBallToPeer(through: hole)
+            dropBallToPeer(at: ball.position)
         } else {
-            swallowAndRespawn(into: hole)
+            endRun()
         }
     }
 
-    /// Solo fall: suck the ball in, then restart the level.
-    private func swallowAndRespawn(into hole: SKSpriteNode) {
+    /// Game over: sink into the dark, show the score, save the best, and
+    /// start a fresh run.
+    private func endRun() {
+        isTransitioning = true
         isFalling = true
         fallHaptic.impactOccurred()
         ball.physicsBody?.velocity = .zero
 
-        let suck = SKAction.group([
-            .move(to: hole.position, duration: 0.12),
-            .scale(to: 0.08, duration: 0.3),
-            .fadeOut(withDuration: 0.3),
-        ])
-        suck.timingMode = .easeIn
-
-        let respawn = SKAction.run { [weak self] in
-            guard let self else { return }
-            self.ball.position = self.startPosition
-            self.ball.setScale(0.3)
-            self.ball.run(.group([
-                .scale(to: 1.0, duration: 0.25),
-                .fadeIn(withDuration: 0.2),
-            ])) { self.isFalling = false }
-            self.shadow.run(.fadeIn(withDuration: 0.2))
+        let finalScore = scoreMeters
+        let isNewBest = finalScore > bestScore
+        if isNewBest {
+            bestScore = finalScore
+            UserDefaults.standard.set(bestScore, forKey: "bestScore")
         }
 
+        let sink = SKAction.group([
+            .scale(to: 0.08, duration: 0.35),
+            .fadeOut(withDuration: 0.35),
+        ])
+        sink.timingMode = .easeIn
+        ball.run(sink)
         shadow.run(.fadeOut(withDuration: 0.2))
-        ball.run(.sequence([suck, .wait(forDuration: 0.6), respawn]))
+
+        let banner = SKLabelNode(
+            text: L10n.t("スコア \(finalScore) m", "SCORE \(finalScore) m"))
+        banner.fontName = "AvenirNext-Bold"
+        banner.fontSize = 34
+        banner.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 1)
+        banner.position = CGPoint(x: 0, y: 20)
+        banner.zPosition = 100
+        banner.setScale(0.1)
+        cameraNode.addChild(banner)
+        let popIn = SKAction.scale(to: 1.0, duration: 0.3)
+        popIn.timingMode = .easeOut
+        banner.run(popIn)
+
+        let sub = SKLabelNode(text: isNewBest
+            ? L10n.t("じこベストこうしん！", "NEW BEST!")
+            : L10n.t("ベスト \(bestScore) m", "BEST \(bestScore) m"))
+        sub.fontName = "AvenirNext-DemiBold"
+        sub.fontSize = 18
+        sub.fontColor = isNewBest
+            ? SKColor(red: 0.85, green: 0.55, blue: 0.10, alpha: 1)
+            : SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.7)
+        sub.position = CGPoint(x: 0, y: -14)
+        sub.zPosition = 100
+        cameraNode.addChild(sub)
+
+        run(.sequence([
+            .wait(forDuration: 2.0),
+            .run { [weak self] in self?.startRun() },
+        ]))
     }
 
     // MARK: - Vertical drop between phones (Milestone 4)
 
-    /// The ball fell through a hole with a peer connected: it keeps falling
-    /// through real space toward the phone held underneath. Ship it to the
-    /// peer and wait to hear whether they caught it.
-    private func dropBallToPeer(through hole: SKSpriteNode) {
+    /// The ball fell into a chasm with a peer connected below: it keeps
+    /// falling through real space toward the phone underneath. Ship it to
+    /// the peer and wait to hear whether they caught it.
+    private func dropBallToPeer(at point: CGPoint) {
         isFalling = true
         awaitingDropResult = true
         fallHaptic.impactOccurred()
         let exitVelocity = ball.physicsBody?.velocity ?? .zero
         ball.physicsBody?.velocity = .zero
 
-        // Send the hole's spot as a point offset from the screen center:
+        // Send the fall's spot as a point offset from the screen center:
         // the catching phone sits physically underneath, so the same spot
         // on its screen is where the ball should land.
         let drop = BallDrop(
-            xOffsetPoints: Double(hole.position.x - cameraNode.position.x),
-            yOffsetPoints: Double(hole.position.y - cameraNode.position.y),
+            xOffsetPoints: Double(point.x - cameraNode.position.x),
+            yOffsetPoints: Double(point.y - cameraNode.position.y),
             velocityDX: Double(exitVelocity.dx),
             velocityDY: Double(exitVelocity.dy),
             colorIndex: displayedColorIndex,
@@ -1222,7 +1184,6 @@ final class GameScene: SKScene {
         multipeer.send(.drop(drop))
 
         let suck = SKAction.group([
-            .move(to: hole.position, duration: 0.12),
             .scale(to: 0.08, duration: 0.3),
             .fadeOut(withDuration: 0.3),
         ])
@@ -1260,14 +1221,17 @@ final class GameScene: SKScene {
         }
     }
 
-    /// Bring the ball back to the start after a missed drop or a timeout.
+    /// Bring the ball back after a missed drop or a timeout — near where
+    /// it fell (the run continues; losing all progress would be brutal).
     private func respawnBall() {
         ballIsHere = true
         ball.removeAllActions()
         ball.isHidden = false
         ball.alpha = 0
         ball.setScale(0.3)
-        ball.position = startPosition
+        ball.position = clampToWorld(safeLandingPoint(CGPoint(
+            x: worldRect.midX, y: cameraNode.position.y
+        )))
         ball.physicsBody?.velocity = .zero
         ball.run(.group([
             .scale(to: 1.0, duration: 0.25),
@@ -1301,9 +1265,8 @@ final class GameScene: SKScene {
 
         // Map the sender's screen spot onto the part of the world this
         // camera is showing — stacked phones share the same physical spot —
-        // then shift clear of this course's own holes, because both phones
-        // run the same course and the twin of the hole it fell through sits
-        // exactly at the landing spot.
+        // then shift onto safe ground, because this course is generated
+        // independently of the one the ball fell from.
         let landing = CGPoint(
             x: cameraNode.position.x + CGFloat(drop.xOffsetPoints),
             y: cameraNode.position.y + CGFloat(drop.yOffsetPoints)
@@ -1345,30 +1308,23 @@ final class GameScene: SKScene {
         )
     }
 
-    /// Push a landing point out of any hole (trap or goal) it would drop
-    /// straight into — and out of any obstacle it would materialize
-    /// inside — so a caught ball settles on open ground beside them.
-    /// The two phones run different courses, so the spot that was a plain
-    /// floor upstairs can be anything down here.
+    /// Push a landing point onto safe ground: out of any chasm (onto its
+    /// bridge when one is near, otherwise past the chasm's edge) and out
+    /// of any obstacle it would materialize inside. The two phones run
+    /// different random courses, so the spot that was plain floor
+    /// upstairs can be anything down here.
     private func safeLandingPoint(_ point: CGPoint) -> CGPoint {
         var point = point
-        let clearance = GameScene.holeRadius + GameScene.ballRadius
-        for center in holes.map(\.position) + [goalPosition] {
-            let dx = point.x - center.x
-            let dy = point.y - center.y
-            let distance = hypot(dx, dy)
-            guard distance < clearance else { continue }
-            if distance < 1 {
-                // Dead center: pick the direction toward the world middle
-                // so the push never shoves the ball out of bounds.
-                let toCenterX = worldRect.midX - center.x
-                let toCenterY = worldRect.midY - center.y
-                let length = max(hypot(toCenterX, toCenterY), 1)
-                point = CGPoint(x: center.x + toCenterX / length * clearance,
-                                y: center.y + toCenterY / length * clearance)
+        for zone in voidZones where zone.rect.contains(point) {
+            if let bridge = zone.bridges.min(by: {
+                abs($0.midX - point.x) < abs($1.midX - point.x)
+            }), abs(bridge.midX - point.x) < size.width * 0.2 {
+                point.x = bridge.midX
             } else {
-                point = CGPoint(x: center.x + dx / distance * clearance,
-                                y: center.y + dy / distance * clearance)
+                let below = zone.rect.minY - GameScene.ballRadius - 4
+                let above = zone.rect.maxY + GameScene.ballRadius + 4
+                point.y = abs(point.y - below) < abs(point.y - above)
+                    ? below : above
             }
         }
 
@@ -1474,7 +1430,7 @@ final class GameScene: SKScene {
         guard let body = ball.physicsBody else { return }
 
         let transfer = BallTransfer(
-            yFraction: Double((ball.position.y - worldRect.minY) / worldRect.height),
+            yOffsetPoints: Double(ball.position.y - cameraNode.position.y),
             velocityDX: Double(body.velocity.dx),
             velocityDY: Double(body.velocity.dy),
             exitedRightEdge: ball.position.x > worldRect.midX,
@@ -1521,67 +1477,11 @@ final class GameScene: SKScene {
         let x = transfer.exitedRightEdge
             ? worldRect.minX + GameScene.ballRadius
             : worldRect.maxX - GameScene.ballRadius
-        let y = worldRect.minY + CGFloat(transfer.yFraction) * worldRect.height
-        ball.position = CGPoint(x: x, y: min(max(y, worldRect.minY + GameScene.ballRadius),
-                                             worldRect.maxY - GameScene.ballRadius))
+        let y = cameraNode.position.y + CGFloat(transfer.yOffsetPoints)
+        // This course is different from the sender's: shift the entry off
+        // chasms and obstacles so the ball arrives on solid ground.
+        ball.position = clampToWorld(safeLandingPoint(CGPoint(x: x, y: y)))
         body.velocity = CGVector(dx: transfer.velocityDX, dy: transfer.velocityDY)
-    }
-
-    /// The ball reached the goal: celebrate, then move to the next level.
-    private func reachGoal() {
-        isTransitioning = true
-        goalHaptic.notificationOccurred(.success)
-        ball.physicsBody?.velocity = .zero
-
-        let suck = SKAction.group([
-            .move(to: goalPosition, duration: 0.12),
-            .scale(to: 0.08, duration: 0.3),
-            .fadeOut(withDuration: 0.3),
-        ])
-        suck.timingMode = .easeIn
-        ball.run(suck)
-        shadow.run(.fadeOut(withDuration: 0.2))
-
-        // Golden burst from the goal.
-        for _ in 0..<3 {
-            let ring = SKShapeNode(circleOfRadius: GameScene.holeRadius)
-            ring.position = goalPosition
-            ring.zPosition = 8
-            ring.fillColor = .clear
-            ring.strokeColor = SKColor(red: 1.0, green: 0.82, blue: 0.35, alpha: 0.85)
-            ring.lineWidth = 3
-            ring.setScale(0.5)
-            addChild(ring)
-            let expand = SKAction.scale(to: CGFloat.random(in: 2.2...3.2),
-                                        duration: TimeInterval.random(in: 0.5...0.8))
-            expand.timingMode = .easeOut
-            ring.run(.sequence([
-                .group([expand, .fadeOut(withDuration: 0.7)]),
-                .removeFromParent(),
-            ]))
-        }
-
-        let isLastLevel = levelIndex == GameScene.levels.count - 1
-        let banner = SKLabelNode(text: isLastLevel ? "ALL CLEAR!" : "LEVEL \(levelIndex + 1) CLEAR!")
-        banner.fontName = "AvenirNext-Bold"
-        banner.fontSize = 34
-        banner.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 1)
-        banner.position = .zero
-        banner.zPosition = 100
-        banner.setScale(0.1)
-        cameraNode.addChild(banner)
-        let popIn = SKAction.scale(to: 1.0, duration: 0.3)
-        popIn.timingMode = .easeOut
-        banner.run(popIn)
-
-        run(.sequence([
-            .wait(forDuration: 1.8),
-            .run { [weak self] in
-                guard let self else { return }
-                self.levelIndex = (self.levelIndex + 1) % GameScene.levels.count
-                self.loadLevel(self.levelIndex)
-            },
-        ]))
     }
 
     // MARK: - Procedural textures (the "real world" look, drawn in code)
@@ -1968,8 +1868,8 @@ final class GameScene: SKScene {
     }
 
     /// Low obstacle: a rounded teal bar.
-    private static func branchTexture() -> SKTexture {
-        let size = CGSize(width: 150, height: 24)
+    private static func barTexture(length: CGFloat = 150) -> SKTexture {
+        let size = CGSize(width: max(length, 40), height: 24)
         return propTexture(named: "prop_branch", size: size) { _ in
             let full = CGRect(origin: .zero, size: size)
             let bar = UIBezierPath(roundedRect: full.insetBy(dx: 1, dy: 1),
@@ -2001,6 +1901,36 @@ final class GameScene: SKScene {
             ring.stroke()
             UIColor(red: 0.72, green: 0.28, blue: 0.20, alpha: 1).setFill()
             UIBezierPath(ovalIn: full.insetBy(dx: 17, dy: 17)).fill()
+        }
+    }
+
+    /// Full-width low hurdle: an amber bar with white chevrons pointing
+    /// up — "hop me". Low enough to jump, wide enough that you must.
+    private static func hurdleTexture(length: CGFloat) -> SKTexture {
+        let height: CGFloat = 22
+        let size = CGSize(width: max(length, 60), height: height)
+        return propTexture(named: "prop_hurdle", size: size) { _ in
+            let full = CGRect(origin: .zero, size: size)
+            let bar = UIBezierPath(roundedRect: full.insetBy(dx: 1, dy: 1),
+                                   cornerRadius: 8)
+            UIColor(red: 0.95, green: 0.68, blue: 0.20, alpha: 1).setFill()
+            bar.fill()
+            UIColor(red: 0.72, green: 0.48, blue: 0.10, alpha: 1).setStroke()
+            bar.lineWidth = 3
+            bar.stroke()
+            // Upward chevrons along the bar.
+            UIColor(white: 1, alpha: 0.9).setFill()
+            var x: CGFloat = 16
+            while x < size.width - 16 {
+                let chevron = UIBezierPath()
+                chevron.move(to: CGPoint(x: x - 6, y: height - 7))
+                chevron.addLine(to: CGPoint(x: x, y: 6))
+                chevron.addLine(to: CGPoint(x: x + 6, y: height - 7))
+                chevron.addLine(to: CGPoint(x: x, y: height - 12))
+                chevron.close()
+                chevron.fill()
+                x += 42
+            }
         }
     }
 
@@ -2147,9 +2077,10 @@ enum PeerMessage: Codable {
 
 /// Everything the ball carries when it rolls to the neighboring phone.
 struct BallTransfer: Codable {
-    /// Vertical position at the moment of exit, as a 0...1 fraction of the
-    /// world height, so different screen sizes line up sensibly.
-    let yFraction: Double
+    /// Height at the moment of exit, as a point offset from the sender's
+    /// screen center — phones sitting side by side share the same physical
+    /// height, whatever their screens or scroll positions.
+    let yOffsetPoints: Double
     let velocityDX: Double
     let velocityDY: Double
     /// True if it left through the right edge (so it enters on the left).
