@@ -197,7 +197,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 40
+    private static let buildNumber = 41
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -257,11 +257,13 @@ final class GameScene: SKScene {
     /// Meters of climb over which the difficulty ramps from 0 to full.
     private static let difficultyRampMeters: CGFloat = 150
     /// The collapse's climb speed (points/s) at difficulty 0 and 1.
-    private static let chaseBaseSpeed: CGFloat = 90
-    private static let chaseMaxSpeed: CGFloat = 300
+    /// The ball's own top speed is 1100 — at full difficulty the chase
+    /// eats half of that, so climbing must be near constant.
+    private static let chaseBaseSpeed: CGFloat = 180
+    private static let chaseMaxSpeed: CGFloat = 520
     /// The collapse never falls further behind the ball than this many
     /// screens — being good buys breathing room, never a pause.
-    private static let chaseMaxLag: CGFloat = 1.6
+    private static let chaseMaxLag: CGFloat = 1.3
     /// Head start (screens below the start) before the collapse arrives.
     private static let chaseHeadStart: CGFloat = 1.1
 
@@ -492,7 +494,7 @@ final class GameScene: SKScene {
         case .bumper:
             texture = GameScene.mushroomTexture()
             body = SKPhysicsBody(circleOfRadius: texture.size().width * 0.46)
-            restitution = 0.95 // flings the ball right back
+            restitution = 1.5 // pinball kicker: adds energy on impact
         case .bar(let length):
             texture = GameScene.barTexture(length: length)
             body = SKPhysicsBody(rectangleOf: CGSize(
