@@ -10,11 +10,18 @@ and catch it when it falls through a hole. Full concept in
   and bounces off the screen edges. Flick the phone up and the ball hops
   (and can jump over holes); landings have haptics and dust effects.
 - ✅ **Milestone 2** — holes the ball can fall into.
-- ✅ **Adventure mode** — three hand-built garden courses on the deck:
-  roll from start to the glowing goal hole past stones, fallen branches
-  and springy mushroom bumpers, hopping over trap holes (a hop also
-  clears the low objects); falling restarts the level. Tall garden
-  fences block the path and can't be jumped.
+- ✅ **Adventure mode** — three hand-built courses on the deck: roll from
+  start to the glowing goal hole past geometric obstacles — slate
+  circles, teal bars, coral bumper rings (extra bouncy) — hopping over
+  trap holes (a hop also clears the low shapes); falling restarts the
+  level. Charcoal hazard-striped walls block the path and can't be
+  jumped. The shapes are placeholders: drop images named `prop_stone`,
+  `prop_branch`, `prop_mushroom`, `prop_fence` into the app bundle and
+  they replace the drawn art automatically (like `deck.png` does for the
+  floor).
+- ✅ **Ball skins** — color + pattern picker, paint your own skin on a 3D
+  ball, or wrap a photo from your library around it; skins scroll with
+  the roll and travel with the ball to the other phone.
 - ✅ **Paired courses** — every level is a *pair* of different layouts.
   Connected phones automatically split them (course A / course B), so
   where your course fences you in, the other phone's course is open:

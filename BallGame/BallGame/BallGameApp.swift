@@ -1,6 +1,7 @@
 import SwiftUI
 import SpriteKit
 import SceneKit
+import PhotosUI
 
 @main
 struct BallGameApp: App {
@@ -189,22 +190,47 @@ struct MenuView: View {
     }
 }
 
-/// Pick the ball's color and surface pattern, or paint a skin by hand.
-/// Choices persist and apply to the running game instantly.
+/// Pick the ball's color and surface pattern, paint a skin by hand, or
+/// wrap a photo around the ball. Choices persist and apply to the running
+/// game instantly.
 struct BallCustomizerView: View {
     @AppStorage("ballColor") private var ballColor = 0
     @AppStorage("ballPattern") private var ballPattern = 0
     @AppStorage("skinVersion") private var skinVersion = 0
     @Environment(\.dismiss) private var dismiss
     @State private var showDrawing = false
+    @State private var photoItem: PhotosPickerItem?
 
     private let patterns: [(name: String, icon: String)] = [
         (L10n.t("ドット", "Dots"), "circle.grid.2x2.fill"),
         (L10n.t("しま", "Stripes"), "line.3.horizontal"),
         (L10n.t("チェック", "Checker"), "squareshape.split.2x2"),
         (L10n.t("むじ", "Plain"), "circle.fill"),
-        (L10n.t("お絵描き", "Draw"), "paintbrush.pointed.fill"),
+        (L10n.t("カスタム", "Custom"), "paintbrush.pointed.fill"),
     ]
+
+    /// Square-crop, downscale and save a picked photo as the ball skin —
+    /// the same file the drawing canvas writes, so it scrolls with the
+    /// roll and travels to the other phone exactly like a painted skin.
+    private func applyPhotoSkin(_ data: Data) {
+        guard let image = UIImage(data: data) else { return }
+        let side = SpherePainter.textureSize
+        let scale = max(side / image.size.width, side / image.size.height)
+        let drawSize = CGSize(width: image.size.width * scale,
+                              height: image.size.height * scale)
+        let origin = CGPoint(x: (side - drawSize.width) / 2,
+                             y: (side - drawSize.height) / 2)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let skin = UIGraphicsImageRenderer(
+            size: CGSize(width: side, height: side), format: format
+        ).image { _ in
+            image.draw(in: CGRect(origin: origin, size: drawSize))
+        }
+        try? skin.pngData()?.write(to: GameScene.customSkinURL)
+        ballPattern = GameScene.BallPattern.custom.rawValue
+        skinVersion += 1
+    }
 
     var body: some View {
         NavigationStack {
@@ -237,12 +263,6 @@ struct BallCustomizerView: View {
                     ForEach(patterns.indices, id: \.self) { index in
                         Button {
                             ballPattern = index
-                            // First time picking お絵描き with no skin yet:
-                            // open the canvas right away.
-                            if index == GameScene.BallPattern.custom.rawValue,
-                               GameScene.loadCustomSkin() == nil {
-                                showDrawing = true
-                            }
                         } label: {
                             VStack(spacing: 5) {
                                 Image(systemName: patterns[index].icon)
@@ -270,14 +290,23 @@ struct BallCustomizerView: View {
                 }
 
                 if ballPattern == GameScene.BallPattern.custom.rawValue {
-                    Button {
-                        showDrawing = true
-                    } label: {
-                        Label(L10n.t("ボールに描く", "Paint the ball"), systemImage: "paintbrush.pointed")
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+                    HStack(spacing: 12) {
+                        Button {
+                            showDrawing = true
+                        } label: {
+                            Label(L10n.t("ボールに描く", "Paint"), systemImage: "paintbrush.pointed")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        PhotosPicker(selection: $photoItem, matching: .images) {
+                            Label(L10n.t("写真をはる", "Use Photo"), systemImage: "photo")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.borderedProminent)
                 }
 
                 Spacer()
@@ -294,6 +323,15 @@ struct BallCustomizerView: View {
                 BallDrawingView {
                     skinVersion += 1
                     ballPattern = GameScene.BallPattern.custom.rawValue
+                }
+            }
+            .onChange(of: photoItem) { item in
+                guard let item else { return }
+                Task {
+                    if let data = try? await item.loadTransferable(type: Data.self) {
+                        await MainActor.run { applyPhotoSkin(data) }
+                    }
+                    await MainActor.run { photoItem = nil }
                 }
             }
         }

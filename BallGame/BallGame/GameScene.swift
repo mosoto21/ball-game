@@ -322,7 +322,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 34
+    private static let buildNumber = 35
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -1927,194 +1927,111 @@ final class GameScene: SKScene {
         return SKTexture(image: image)
     }
 
-    /// A rounded garden stone seen from above: gray body, mossy blotches,
-    /// a lit top-left edge and a darker ground line.
+    // MARK: Obstacle textures — geometric placeholders
+    //
+    // Flat geometric shapes for now; each one checks the asset bundle
+    // first, so dropping images named "prop_stone", "prop_branch",
+    // "prop_mushroom" or "prop_fence" into the project swaps the art
+    // without touching code (same trick as deck.png for the floor).
+
+    /// Bundle override: draw the image into the placeholder's canvas so
+    /// sizes and physics stay identical whichever art is active.
+    private static func propTexture(named name: String, size: CGSize,
+                                    fallback: (CGContext) -> Void) -> SKTexture {
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            if let art = UIImage(named: name) {
+                art.draw(in: CGRect(origin: .zero, size: size))
+            } else {
+                fallback(ctx.cgContext)
+            }
+        }
+        return SKTexture(image: image)
+    }
+
+    /// Low obstacle: a flat slate circle with a darker ring.
     private static func stoneTexture() -> SKTexture {
         let diameter: CGFloat = 52
         let size = CGSize(width: diameter, height: diameter)
-        let image = UIGraphicsImageRenderer(size: size).image { ctx in
-            let c = ctx.cgContext
-
-            // Slightly irregular oval silhouette.
-            let body = UIBezierPath()
-            let center = CGPoint(x: diameter / 2, y: diameter / 2)
-            var first = true
-            for step in 0..<10 {
-                let angle = CGFloat(step) / 10 * 2 * .pi
-                let wobble: CGFloat = [1.0, 0.93, 0.98, 0.9, 1.0,
-                                       0.95, 0.88, 0.97, 0.92, 0.99][step]
-                let point = CGPoint(
-                    x: center.x + cos(angle) * diameter / 2 * wobble * 0.96,
-                    y: center.y + sin(angle) * diameter / 2 * wobble * 0.96
-                )
-                if first { body.move(to: point); first = false }
-                else { body.addLine(to: point) }
-            }
-            body.close()
-            UIColor(red: 0.58, green: 0.58, blue: 0.56, alpha: 1).setFill()
-            body.fill()
-
-            // Shaded lower-right, lit upper-left.
-            c.saveGState()
-            body.addClip()
-            UIColor(red: 0.44, green: 0.44, blue: 0.43, alpha: 1).setFill()
-            c.fill(CGRect(x: diameter * 0.3, y: diameter * 0.55,
-                          width: diameter, height: diameter))
-            UIColor(red: 0.72, green: 0.72, blue: 0.70, alpha: 1).setFill()
-            UIBezierPath(ovalIn: CGRect(x: diameter * 0.12, y: diameter * 0.10,
-                                        width: diameter * 0.42,
-                                        height: diameter * 0.32)).fill()
-            // Moss flecks.
-            UIColor(red: 0.45, green: 0.55, blue: 0.35, alpha: 0.7).setFill()
-            UIBezierPath(ovalIn: CGRect(x: diameter * 0.6, y: diameter * 0.28,
-                                        width: 9, height: 6)).fill()
-            UIBezierPath(ovalIn: CGRect(x: diameter * 0.25, y: diameter * 0.62,
-                                        width: 7, height: 5)).fill()
-            c.restoreGState()
+        return propTexture(named: "prop_stone", size: size) { _ in
+            let full = CGRect(origin: .zero, size: size)
+            UIColor(red: 0.45, green: 0.49, blue: 0.55, alpha: 1).setFill()
+            UIBezierPath(ovalIn: full.insetBy(dx: 1, dy: 1)).fill()
+            UIColor(red: 0.30, green: 0.34, blue: 0.40, alpha: 1).setStroke()
+            let ring = UIBezierPath(ovalIn: full.insetBy(dx: 4, dy: 4))
+            ring.lineWidth = 4
+            ring.stroke()
+            UIColor(white: 1, alpha: 0.25).setFill()
+            UIBezierPath(ovalIn: CGRect(x: diameter * 0.22, y: diameter * 0.18,
+                                        width: diameter * 0.2,
+                                        height: diameter * 0.2)).fill()
         }
-        return SKTexture(image: image)
     }
 
-    /// A fallen twig: bark-brown, slightly bent, with a snapped side stub
-    /// and pale end grain.
+    /// Low obstacle: a rounded teal bar.
     private static func branchTexture() -> SKTexture {
-        let size = CGSize(width: 150, height: 26)
-        let image = UIGraphicsImageRenderer(size: size).image { ctx in
-            let c = ctx.cgContext
-
-            // Gently bowed body.
-            let body = UIBezierPath()
-            body.move(to: CGPoint(x: 3, y: 12))
-            body.addQuadCurve(to: CGPoint(x: 147, y: 14),
-                              controlPoint: CGPoint(x: 75, y: 6))
-            body.addLine(to: CGPoint(x: 147, y: 22))
-            body.addQuadCurve(to: CGPoint(x: 3, y: 20),
-                              controlPoint: CGPoint(x: 75, y: 15))
-            body.close()
-            UIColor(red: 0.45, green: 0.32, blue: 0.20, alpha: 1).setFill()
-            body.fill()
-
-            // Bark streaks.
-            c.saveGState()
-            body.addClip()
-            UIColor(red: 0.33, green: 0.23, blue: 0.14, alpha: 1).setFill()
-            c.fill(CGRect(x: 3, y: 17, width: 144, height: 2))
-            UIColor(red: 0.58, green: 0.44, blue: 0.30, alpha: 1).setFill()
-            c.fill(CGRect(x: 3, y: 10, width: 144, height: 1.6))
-            c.restoreGState()
-
-            // Snapped side stub.
-            let stub = UIBezierPath()
-            stub.move(to: CGPoint(x: 96, y: 12))
-            stub.addLine(to: CGPoint(x: 112, y: 1))
-            stub.addLine(to: CGPoint(x: 119, y: 5))
-            stub.addLine(to: CGPoint(x: 104, y: 14))
-            stub.close()
-            UIColor(red: 0.40, green: 0.28, blue: 0.17, alpha: 1).setFill()
-            stub.fill()
-
-            // Pale end grain at both tips.
-            UIColor(red: 0.80, green: 0.68, blue: 0.50, alpha: 1).setFill()
-            UIBezierPath(ovalIn: CGRect(x: 0, y: 11, width: 6, height: 10)).fill()
-            UIBezierPath(ovalIn: CGRect(x: 144, y: 13, width: 6, height: 10)).fill()
+        let size = CGSize(width: 150, height: 24)
+        return propTexture(named: "prop_branch", size: size) { _ in
+            let full = CGRect(origin: .zero, size: size)
+            let bar = UIBezierPath(roundedRect: full.insetBy(dx: 1, dy: 1),
+                                   cornerRadius: 11)
+            UIColor(red: 0.22, green: 0.55, blue: 0.55, alpha: 1).setFill()
+            bar.fill()
+            UIColor(red: 0.14, green: 0.38, blue: 0.38, alpha: 1).setStroke()
+            bar.lineWidth = 3
+            bar.stroke()
+            UIColor(white: 1, alpha: 0.25).setFill()
+            UIBezierPath(roundedRect: CGRect(x: 10, y: 5,
+                                             width: size.width - 20, height: 4),
+                         cornerRadius: 2).fill()
         }
-        return SKTexture(image: image)
     }
 
-    /// A toadstool cap seen from above: red dome, white spots, a bright
-    /// sheen toward the light. The springiest thing in the garden.
+    /// Bouncy obstacle: a coral circle with a bold double ring, so it
+    /// reads as "bumper" at a glance.
     private static func mushroomTexture() -> SKTexture {
         let diameter: CGFloat = 50
         let size = CGSize(width: diameter, height: diameter)
-        let image = UIGraphicsImageRenderer(size: size).image { ctx in
-            let c = ctx.cgContext
+        return propTexture(named: "prop_mushroom", size: size) { _ in
             let full = CGRect(origin: .zero, size: size)
-
-            UIColor(red: 0.82, green: 0.20, blue: 0.16, alpha: 1).setFill()
+            UIColor(red: 0.95, green: 0.45, blue: 0.35, alpha: 1).setFill()
             UIBezierPath(ovalIn: full.insetBy(dx: 1, dy: 1)).fill()
-
-            // Darker rim so the cap reads as a dome.
-            UIColor(red: 0.60, green: 0.12, blue: 0.10, alpha: 1).setStroke()
-            let rim = UIBezierPath(ovalIn: full.insetBy(dx: 2.5, dy: 2.5))
-            rim.lineWidth = 3
-            rim.stroke()
-
-            // White spots.
-            UIColor(red: 0.97, green: 0.95, blue: 0.90, alpha: 1).setFill()
-            for (x, y, r) in [(0.32, 0.30, 5.5), (0.62, 0.22, 4.0),
-                              (0.70, 0.58, 6.0), (0.30, 0.66, 4.5),
-                              (0.52, 0.44, 3.2)] {
-                UIBezierPath(ovalIn: CGRect(
-                    x: diameter * x - r, y: diameter * y - r,
-                    width: r * 2, height: r * 2
-                )).fill()
-            }
-
-            // Sheen toward the light.
-            if let sheen = CGGradient(
-                colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                colors: [UIColor(white: 1, alpha: 0.45).cgColor,
-                         UIColor(white: 1, alpha: 0).cgColor] as CFArray,
-                locations: [0, 1]
-            ) {
-                c.addEllipse(in: full.insetBy(dx: 2, dy: 2))
-                c.clip()
-                let lightCenter = CGPoint(x: diameter * 0.32, y: diameter * 0.28)
-                c.drawRadialGradient(
-                    sheen,
-                    startCenter: lightCenter, startRadius: 0,
-                    endCenter: lightCenter, endRadius: diameter * 0.5,
-                    options: []
-                )
-            }
+            UIColor(white: 1, alpha: 0.9).setStroke()
+            let ring = UIBezierPath(ovalIn: full.insetBy(dx: 7, dy: 7))
+            ring.lineWidth = 3
+            ring.stroke()
+            UIColor(red: 0.72, green: 0.28, blue: 0.20, alpha: 1).setFill()
+            UIBezierPath(ovalIn: full.insetBy(dx: 17, dy: 17)).fill()
         }
-        return SKTexture(image: image)
     }
 
-    /// A run of garden fence seen from above: a long weathered beam with
-    /// post caps breaking the line. Too tall to hop.
+    /// Tall obstacle: a charcoal wall with hazard notches at both ends —
+    /// visually heavier than the low shapes, since it can't be jumped.
     private static func fenceTexture(length: CGFloat) -> SKTexture {
         let height: CGFloat = 26
         let size = CGSize(width: max(length, 60), height: height)
-        let image = UIGraphicsImageRenderer(size: size).image { ctx in
-            let c = ctx.cgContext
-
-            // Beam.
-            let beam = UIBezierPath(roundedRect: CGRect(x: 0, y: 4,
-                                                        width: size.width,
-                                                        height: 18),
-                                    cornerRadius: 4)
-            UIColor(red: 0.55, green: 0.42, blue: 0.28, alpha: 1).setFill()
-            beam.fill()
-
-            // Grain and edge shading.
-            c.saveGState()
-            beam.addClip()
-            UIColor(red: 0.42, green: 0.31, blue: 0.20, alpha: 1).setFill()
-            c.fill(CGRect(x: 0, y: 18, width: size.width, height: 4))
-            UIColor(red: 0.68, green: 0.54, blue: 0.38, alpha: 1).setFill()
-            c.fill(CGRect(x: 0, y: 6, width: size.width, height: 2.5))
-            UIColor(red: 0.47, green: 0.35, blue: 0.23, alpha: 0.8).setFill()
-            var grainX: CGFloat = 14
-            while grainX < size.width {
-                c.fill(CGRect(x: grainX, y: 8, width: 1.4, height: 10))
-                grainX += 26
-            }
-            c.restoreGState()
-
-            // Post caps every ~90 pt, and one at each end.
-            let postCount = max(Int(size.width / 90), 1)
-            for index in 0...postCount {
-                let x = size.width * CGFloat(index) / CGFloat(postCount)
-                let post = CGRect(x: min(max(x - 7, 0), size.width - 14),
-                                  y: 0, width: 14, height: height)
-                UIColor(red: 0.40, green: 0.29, blue: 0.18, alpha: 1).setFill()
-                UIBezierPath(roundedRect: post, cornerRadius: 3).fill()
-                UIColor(red: 0.60, green: 0.47, blue: 0.32, alpha: 1).setFill()
-                UIBezierPath(ovalIn: post.insetBy(dx: 3, dy: 8)).fill()
+        return propTexture(named: "prop_fence", size: size) { _ in
+            let full = CGRect(origin: .zero, size: size)
+            let wall = UIBezierPath(roundedRect: full.insetBy(dx: 1, dy: 1),
+                                    cornerRadius: 6)
+            UIColor(red: 0.22, green: 0.24, blue: 0.28, alpha: 1).setFill()
+            wall.fill()
+            UIColor(red: 0.10, green: 0.11, blue: 0.13, alpha: 1).setStroke()
+            wall.lineWidth = 3
+            wall.stroke()
+            // Diagonal notches so the wall reads as "solid, keep out".
+            UIColor(red: 0.95, green: 0.75, blue: 0.25, alpha: 0.9).setFill()
+            var x: CGFloat = 8
+            while x < size.width - 14 {
+                let stripe = UIBezierPath()
+                stripe.move(to: CGPoint(x: x, y: 6))
+                stripe.addLine(to: CGPoint(x: x + 7, y: 6))
+                stripe.addLine(to: CGPoint(x: x + 13, y: height - 6))
+                stripe.addLine(to: CGPoint(x: x + 6, y: height - 6))
+                stripe.close()
+                stripe.fill()
+                x += 34
             }
         }
-        return SKTexture(image: image)
     }
 }
 
