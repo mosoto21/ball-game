@@ -21,6 +21,9 @@ struct GameView: View {
     }()
 
     @State private var showCustomizer = false
+    /// The game stays paused behind the title screen until the player taps
+    /// START; the tilt physics and motion updates only really kick in then.
+    @State private var started = false
     @AppStorage("ballColor") private var ballColor = 0
     @AppStorage("ballPattern") private var ballPattern = 0
     /// Bumped every time the drawn skin is saved, so the scene restyles even
@@ -31,7 +34,9 @@ struct GameView: View {
         ZStack(alignment: .topTrailing) {
             // Note: the IOGPUMetal "background execution" console messages
             // are harmless (iOS refusing GPU work while backgrounded).
-            SpriteView(scene: scene)
+            // The scene runs paused until the player presses START, so the
+            // ball waits at the start line instead of rolling immediately.
+            SpriteView(scene: scene, isPaused: !started)
                 .ignoresSafeArea()
 
             Button {
@@ -54,6 +59,17 @@ struct GameView: View {
             }
             .padding(.trailing, 20)
             .padding(.top, 8)
+            // Hide the customizer button behind the title screen.
+            .opacity(started ? 1 : 0)
+
+            if !started {
+                StartScreenView {
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        started = true
+                    }
+                }
+                .transition(.opacity)
+            }
         }
         .statusBarHidden()
         .sheet(isPresented: $showCustomizer) {
@@ -63,6 +79,69 @@ struct GameView: View {
         .onChange(of: ballColor) { _ in scene.applyBallStyle() }
         .onChange(of: ballPattern) { _ in scene.applyBallStyle() }
         .onChange(of: skinVersion) { _ in scene.applyBallStyle() }
+    }
+}
+
+/// The title screen shown before play. A big START button rolls the game
+/// into motion; until it is tapped the scene stays paused so the ball waits
+/// patiently at the start line.
+struct StartScreenView: View {
+    var onStart: () -> Void
+
+    /// Gentle bob on the START label so it reads as tappable.
+    @State private var pulse = false
+
+    var body: some View {
+        ZStack {
+            // Warm wooden-desk backdrop so the title matches the game's look.
+            LinearGradient(
+                colors: [
+                    Color(red: 0.87, green: 0.80, blue: 0.67),
+                    Color(red: 0.72, green: 0.62, blue: 0.48),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 40) {
+                VStack(spacing: 10) {
+                    Text("コロコロ")
+                        .font(.system(size: 52, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color(red: 0.25, green: 0.15, blue: 0.08))
+                    Text("ボール")
+                        .font(.system(size: 52, weight: .heavy, design: .rounded))
+                        .foregroundStyle(Color(red: 1.0, green: 0.45, blue: 0.25))
+                }
+                .shadow(color: .black.opacity(0.15), radius: 4, y: 3)
+
+                Button(action: onStart) {
+                    Text("START")
+                        .font(.system(size: 30, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 56)
+                        .padding(.vertical, 20)
+                        .background(
+                            Capsule()
+                                .fill(Color(red: 1.0, green: 0.45, blue: 0.25))
+                        )
+                        .overlay(
+                            Capsule().stroke(.white.opacity(0.85), lineWidth: 3)
+                        )
+                        .shadow(color: .black.opacity(0.25), radius: 6, y: 4)
+                        .scaleEffect(pulse ? 1.06 : 1.0)
+                }
+
+                Text("かたむけてボールをゴールへ")
+                    .font(.headline)
+                    .foregroundStyle(Color(red: 0.25, green: 0.15, blue: 0.08).opacity(0.7))
+            }
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                pulse = true
+            }
+        }
     }
 }
 
