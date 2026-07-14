@@ -23,6 +23,9 @@ struct GameView: View {
 
     /// nil while the menu is showing.
     @State private var mode: GameScene.PlayMode?
+    /// False until the player taps START on the pre-game overlay; the scene
+    /// stays paused so the ball and the collapse wait for the tap.
+    @State private var started = false
     @State private var showCustomizer = false
     @AppStorage("ballColor") private var ballColor = 0
     @AppStorage("ballPattern") private var ballPattern = 0
@@ -35,6 +38,7 @@ struct GameView: View {
             if mode == nil {
                 MenuView { selected in
                     scene.setPlayMode(selected)
+                    started = false
                     mode = selected
                 }
             } else {
@@ -55,14 +59,20 @@ struct GameView: View {
         ZStack(alignment: .top) {
             // Note: the IOGPUMetal "background execution" console messages
             // are harmless (iOS refusing GPU work while backgrounded).
-            SpriteView(scene: scene)
+            // Paused until START is tapped, so nothing moves prematurely.
+            SpriteView(scene: scene, isPaused: !started)
                 .ignoresSafeArea()
+
+            if !started {
+                startOverlay
+            }
 
             HStack {
                 Button {
                     // Back to the menu; the mode is picked fresh there.
                     scene.setPlayMode(.solo)
                     mode = nil
+                    started = false
                 } label: {
                     Image(systemName: "house.fill")
                         .font(.callout)
@@ -97,6 +107,42 @@ struct GameView: View {
             .padding(.horizontal, 20)
             .padding(.top, 8)
         }
+    }
+
+    /// Dimmed cover over the frozen game with one big START button; the
+    /// scene unpauses when it is tapped.
+    private var startOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+                .ignoresSafeArea()
+
+            VStack(spacing: 22) {
+                Text(L10n.t("じゅんびはいい？", "Ready?"))
+                    .font(.system(.title2, design: .rounded))
+                    .fontWeight(.bold)
+                    .foregroundStyle(.white)
+                    .shadow(radius: 4)
+
+                Button {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        started = true
+                    }
+                } label: {
+                    Text("START")
+                        .font(.system(size: 30, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 56)
+                        .padding(.vertical, 18)
+                        .background(
+                            Capsule().fill(Color(red: 1.0, green: 0.45, blue: 0.25))
+                        )
+                        .overlay(Capsule().stroke(.white.opacity(0.85), lineWidth: 3))
+                        .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .transition(.opacity)
     }
 }
 
