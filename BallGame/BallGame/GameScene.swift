@@ -175,6 +175,11 @@ final class GameScene: SKScene {
     /// START. Controlled by GameView.
     var isGameStarted = false
 
+    /// True while the game-over screen waits for TRY AGAIN to be tapped.
+    private var awaitingRestart = false
+    /// The tappable TRY AGAIN button on the game-over screen.
+    private var tryAgainButton: SKNode?
+
     /// Called from the menu when a mode is picked (or when returning to
     /// the menu, with `.solo`, which also drops any live connection).
     func setPlayMode(_ mode: PlayMode) {
@@ -185,6 +190,8 @@ final class GameScene: SKScene {
             multipeer.stop()
             nearby.stop()
         }
+        // The collapse only hunts in solo; play-together is a co-op sandbox.
+        collapseNode.isHidden = multiplayerEnabled
         // The update loop isn't running while the menu is up; reset the
         // arrangement state here so walls start closed until UWB speaks.
         sidePassOpen = false
@@ -202,7 +209,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 42
+    private static let buildNumber = 43
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -322,6 +329,8 @@ final class GameScene: SKScene {
         isTransitioning = false
         awaitingDropResult = false
         isDropGrace = false
+        awaitingRestart = false
+        tryAgainButton = nil
         lastUpdateTime = nil
 
         worldRect = CGRect(x: 0, y: 0, width: size.width,
@@ -477,6 +486,8 @@ final class GameScene: SKScene {
         collapseNode.addChild(edge)
 
         collapseNode.position = CGPoint(x: size.width / 2, y: chaseY)
+        // Play-together is co-op: no collapse chasing from below.
+        collapseNode.isHidden = multiplayerEnabled
         addChild(collapseNode)
     }
 
@@ -1068,8 +1079,9 @@ final class GameScene: SKScene {
         // The floor collapses from below, faster the higher you are, and
         // never drops more than a couple of screens behind — stalling is
         // not a strategy. Swallowed means the run ends (or the phone
-        // underneath catches the falling ball).
-        if !isTransitioning {
+        // underneath catches the falling ball). Solo only: play-together
+        // has no collapse, so friends can take their time.
+        if !isTransitioning, !multiplayerEnabled {
             let chaseDifficulty = min(1, max(0,
                 (ball.position.y - runStartY) / GameScene.pointsPerMeter
                     / GameScene.difficultyRampMeters))
@@ -1347,10 +1359,41 @@ final class GameScene: SKScene {
         sub.zPosition = 100
         cameraNode.addChild(sub)
 
-        run(.sequence([
-            .wait(forDuration: 2.0),
-            .run { [weak self] in self?.startRun() },
-        ]))
+        // The run only restarts when the player taps TRY AGAIN.
+        let button = SKShapeNode(rectOf: CGSize(width: 230, height: 62),
+                                 cornerRadius: 31)
+        button.fillColor = SKColor(red: 1.0, green: 0.45, blue: 0.25, alpha: 1)
+        button.strokeColor = SKColor(white: 1, alpha: 0.85)
+        button.lineWidth = 3
+        button.position = CGPoint(x: 0, y: -78)
+        button.zPosition = 100
+
+        let label = SKLabelNode(text: L10n.t("もういちど", "TRY AGAIN"))
+        label.fontName = "AvenirNext-Heavy"
+        label.fontSize = 24
+        label.fontColor = .white
+        label.verticalAlignmentMode = .center
+        button.addChild(label)
+
+        button.setScale(0.1)
+        cameraNode.addChild(button)
+        let buttonIn = SKAction.scale(to: 1.0, duration: 0.3)
+        buttonIn.timingMode = .easeOut
+        button.run(.sequence([.wait(forDuration: 0.4), buttonIn]))
+
+        tryAgainButton = button
+        awaitingRestart = true
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard awaitingRestart, let touch = touches.first,
+              let button = tryAgainButton else { return }
+        let location = touch.location(in: cameraNode)
+        // A roomy hit box — mid-game-over is no time for precision tapping.
+        guard button.frame.insetBy(dx: -20, dy: -20).contains(location) else { return }
+        awaitingRestart = false
+        tryAgainButton = nil
+        startRun()
     }
 
     // MARK: - Vertical drop between phones (Milestone 4)
