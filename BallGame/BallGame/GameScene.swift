@@ -170,6 +170,11 @@ final class GameScene: SKScene {
     /// ball while set (see catchGraceDuration).
     private var isDropGrace = false
 
+    /// False while the START overlay is up: the course, ball and collapse
+    /// are all drawn in place, but nothing moves until the player taps
+    /// START. Controlled by GameView.
+    var isGameStarted = false
+
     /// Called from the menu when a mode is picked (or when returning to
     /// the menu, with `.solo`, which also drops any live connection).
     func setPlayMode(_ mode: PlayMode) {
@@ -197,7 +202,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 41
+    private static let buildNumber = 42
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -988,6 +993,13 @@ final class GameScene: SKScene {
 
         guard let body = ball.physicsBody else { return }
 
+        // Waiting on the START overlay: the world renders as-is behind the
+        // button, but the ball and the collapse stay frozen.
+        guard isGameStarted else {
+            body.velocity = .zero
+            shadow.position = CGPoint(x: ball.position.x, y: ball.position.y - 4)
+            return
+        }
 
         // Track the connection: start/stop UWB ranging. Losing the peer
         // while the ball is visiting starts a fresh run.

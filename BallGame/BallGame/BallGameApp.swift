@@ -38,6 +38,7 @@ struct GameView: View {
             if mode == nil {
                 MenuView { selected in
                     scene.setPlayMode(selected)
+                    scene.isGameStarted = false
                     started = false
                     mode = selected
                 }
@@ -59,8 +60,11 @@ struct GameView: View {
         ZStack(alignment: .top) {
             // Note: the IOGPUMetal "background execution" console messages
             // are harmless (iOS refusing GPU work while backgrounded).
-            // Paused until START is tapped, so nothing moves prematurely.
-            SpriteView(scene: scene, isPaused: !started)
+            // The scene renders normally behind the START overlay; its own
+            // isGameStarted flag keeps the ball and collapse frozen until
+            // the button is tapped (SpriteView's isPaused would blank the
+            // view to gray instead of showing the frozen game).
+            SpriteView(scene: scene)
                 .ignoresSafeArea()
 
             if !started {
@@ -71,6 +75,7 @@ struct GameView: View {
                 Button {
                     // Back to the menu; the mode is picked fresh there.
                     scene.setPlayMode(.solo)
+                    scene.isGameStarted = false
                     mode = nil
                     started = false
                 } label: {
@@ -124,6 +129,7 @@ struct GameView: View {
                     .shadow(radius: 4)
 
                 Button {
+                    scene.isGameStarted = true
                     withAnimation(.easeOut(duration: 0.25)) {
                         started = true
                     }
