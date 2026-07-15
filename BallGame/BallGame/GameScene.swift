@@ -163,6 +163,12 @@ final class GameScene: SKScene {
     }
     /// False while the ball is visiting the other phone.
     private var ballIsHere = true
+    /// The live velocity of the ball on the phone that currently holds it,
+    /// streamed over so this screen can scroll its world in sync while our
+    /// ball is away. Read only while `ballIsHere` is false.
+    private var peerScrollVelocity = CGVector.zero
+    /// Last time we streamed our own velocity to the peer (throttle clock).
+    private var lastScrollSendTime: TimeInterval = 0
     /// True after dropping the ball through a hole, until the peer reports
     /// whether the catch underneath succeeded.
     private var awaitingDropResult = false
@@ -209,7 +215,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 43
+    private static let buildNumber = 44
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -278,6 +284,10 @@ final class GameScene: SKScene {
     private static let chaseMaxLag: CGFloat = 1.3
     /// Head start (screens below the start) before the collapse arrives.
     private static let chaseHeadStart: CGFloat = 1.1
+    /// How often (seconds) the phone holding the ball streams its velocity so
+    /// the other phone's world scrolls in sync — ~30 Hz is smooth without
+    /// flooding the Multipeer link.
+    private static let scrollSyncInterval: TimeInterval = 1.0 / 30.0
 
     // MARK: - Scene lifecycle
 
@@ -301,6 +311,8 @@ final class GameScene: SKScene {
             case .drop(let drop): self?.receiveFallingBall(drop)
             case .dropResult(let caught): self?.handleDropResult(caught: caught)
             case .uwbToken(let data): self?.nearby.receivePeerToken(data)
+            case .worldScroll(let dx, let dy):
+                self?.peerScrollVelocity = CGVector(dx: dx, dy: dy)
             }
         }
         nearby.onTokenReady = { [weak self] data in
@@ -1043,7 +1055,14 @@ final class GameScene: SKScene {
             rebuildWalls()
         }
 
-        guard ballIsHere else { return }
+        // While the ball is visiting the other phone this screen isn't dead:
+        // it scrolls in sync with the neighboring ball's streamed motion, so
+        // both worlds move together. Steering, hopping and scoring resume
+        // only once the ball is back here.
+        guard ballIsHere else {
+            scrollWorldWhileAway(dt: dt)
+            return
+        }
 
         // A sharp upward pop of the phone (acceleration out of the screen,
         // beyond gravity) launches the ball into a hop.
@@ -1150,6 +1169,17 @@ final class GameScene: SKScene {
         scrollSurfacePattern(velocity: body.velocity, dt: dt)
         followBallWithCamera()
         layoutFloorTiles()
+
+        // We hold the ball: stream our velocity so the peer's screen scrolls
+        // its world in sync with ours. Throttled and unreliable — it's a
+        // continuous position feed, not a one-off event.
+        if peerConnected,
+           currentTime - lastScrollSendTime > GameScene.scrollSyncInterval {
+            lastScrollSendTime = currentTime
+            multipeer.send(.worldScroll(dx: Double(body.velocity.dx),
+                                        dy: Double(body.velocity.dy)),
+                           reliable: false)
+        }
     }
 
     /// Keep the ball in view, clamping so the camera never shows past the
@@ -1161,6 +1191,24 @@ final class GameScene: SKScene {
             x: min(max(ball.position.x, worldRect.minX + halfWidth), worldRect.maxX - halfWidth),
             y: min(max(ball.position.y, worldRect.minY + halfHeight), worldRect.maxY - halfHeight)
         )
+    }
+
+    /// Keep this screen in step with the other phone while the ball is over
+    /// there: scroll the camera by the velocity streamed from the phone that
+    /// holds the ball, so both worlds move together. The floor recycles and
+    /// the course generates ahead just as if the ball were climbing here.
+    private func scrollWorldWhileAway(dt: CGFloat) {
+        let halfWidth = size.width / 2
+        let halfHeight = size.height / 2
+        cameraNode.position = CGPoint(
+            x: min(max(cameraNode.position.x + peerScrollVelocity.dx * dt,
+                       worldRect.minX + halfWidth), worldRect.maxX - halfWidth),
+            y: min(max(cameraNode.position.y + peerScrollVelocity.dy * dt,
+                       worldRect.minY + halfHeight), worldRect.maxY - halfHeight))
+
+        generateBands(upTo: cameraNode.position.y + size.height * 1.8)
+        pruneBands(below: cameraNode.position.y - size.height * 2)
+        layoutFloorTiles()
     }
 
     /// Seen from above, a rolling ball's top surface moves in the direction
@@ -1432,6 +1480,8 @@ final class GameScene: SKScene {
         ball.run(.sequence([suck, .run { [weak self] in
             self?.ball.isHidden = true
             self?.ballIsHere = false
+            // Start from rest; the peer's stream takes over the scroll.
+            self?.peerScrollVelocity = .zero
         }]))
 
         // If the peer never answers (disconnected mid-fall), bring it home.
@@ -1684,6 +1734,8 @@ final class GameScene: SKScene {
         multipeer.send(.sideTransfer(transfer))
 
         ballIsHere = false
+        // Start from rest; the peer's stream takes over the scroll.
+        peerScrollVelocity = .zero
         ball.isHidden = true
         shadow.isHidden = true
         body.velocity = .zero
@@ -2315,6 +2367,9 @@ enum PeerMessage: Codable {
     /// An NIDiscoveryToken (archived) so the two phones can range each
     /// other over UWB and learn their physical arrangement.
     case uwbToken(Data)
+    /// The live velocity (points/s) of the ball on the phone that holds it,
+    /// streamed so the other phone can scroll its background in sync.
+    case worldScroll(dx: Double, dy: Double)
 }
 
 /// Everything the ball carries when it rolls to the neighboring phone.
@@ -2408,10 +2463,14 @@ final class MultipeerManager: NSObject {
         connectedPeerName = nil
     }
 
-    func send(_ message: PeerMessage) {
+    /// Reliable by default. The world-scroll stream passes `reliable: false`
+    /// so a dropped packet is skipped rather than queued — for a 30 Hz
+    /// position feed the next packet is already on its way.
+    func send(_ message: PeerMessage, reliable: Bool = true) {
         guard !session.connectedPeers.isEmpty,
               let data = try? JSONEncoder().encode(message) else { return }
-        try? session.send(data, toPeers: session.connectedPeers, with: .reliable)
+        try? session.send(data, toPeers: session.connectedPeers,
+                          with: reliable ? .reliable : .unreliable)
     }
 }
 
