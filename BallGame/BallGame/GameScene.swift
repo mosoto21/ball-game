@@ -148,8 +148,17 @@ final class GameScene: SKScene {
     /// Co-op, while the ball is on the other phone: the camera height the
     /// peer last reported, which this screen glides toward.
     private var remoteCameraTargetY: CGFloat?
-    /// Last time a coopSync message went out (throttled to ~12 Hz).
+    /// The peer camera's climb speed (points/s); advances the target
+    /// between packets so the follow reads as one continuous glide.
+    private var remoteCameraVelocityY: CGFloat = 0
+    /// Last time a coopSync message went out (throttled to ~30 Hz).
     private var lastCoopSyncTime: TimeInterval = 0
+
+    /// Co-op ready gate: a shared run only (re)starts after BOTH players
+    /// press the button (READY on connect, TRY AGAIN after a game over).
+    private var isHoldingForReady = false
+    private var localReady = false
+    private var peerReady = false
     private var peerConnected = false
     /// UWB ranging against the connected peer.
     private let nearby = NearbyPlacementManager()
@@ -221,7 +230,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 45
+    private static let buildNumber = 46
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -313,10 +322,12 @@ final class GameScene: SKScene {
             case .drop(let drop): self?.receiveFallingBall(drop)
             case .dropResult(let caught): self?.handleDropResult(caught: caught)
             case .uwbToken(let data): self?.nearby.receivePeerToken(data)
-            case .coopSync(let offset, let score):
-                self?.receiveCoopSync(heightOffset: offset, scoreMeters: score)
+            case .coopSync(let offset, let velocity, let score):
+                self?.receiveCoopSync(heightOffset: offset,
+                                      heightVelocity: velocity,
+                                      scoreMeters: score)
             case .runOver(let score): self?.receivePeerRunOver(scoreMeters: score)
-            case .restartRun: self?.receivePeerRestart()
+            case .readyToStart: self?.receivePeerReady()
             }
         }
         nearby.onTokenReady = { [weak self] data in
@@ -348,6 +359,8 @@ final class GameScene: SKScene {
         awaitingRestart = false
         tryAgainButton = nil
         remoteCameraTargetY = nil
+        remoteCameraVelocityY = 0
+        isHoldingForReady = false
         lastUpdateTime = nil
 
         worldRect = CGRect(x: 0, y: 0, width: size.width,
@@ -1043,14 +1056,23 @@ final class GameScene: SKScene {
             }
             removeAction(forKey: "dropTimeout")
             updateConnectionLabel()
+            // Co-op: the peer left — dissolve any ready gate and carry on
+            // alone with the ball back on this screen.
+            if isCoop, !peerConnected {
+                clearReadyGate()
+                startRun()
+                return
+            }
             if !peerConnected, !ballIsHere {
                 startRun()
                 return
             }
-            // Co-op: a fresh shared run begins the moment the phones
-            // connect — one ball, on the primary phone only.
+            // Co-op: on connect, build the fresh shared world (one ball,
+            // on the primary phone) but hold it frozen behind a READY
+            // button until both players have pressed theirs.
             if peerConnected, isCoop {
                 startRun()
+                presentReadyGate()
                 return
             }
         }
@@ -1074,14 +1096,26 @@ final class GameScene: SKScene {
         // stretch of the climb. The course keeps generating under the
         // borrowed camera so there's something to look at (and to land on).
         if isCoop, !ballIsHere, let target = remoteCameraTargetY {
+            // Dead-reckon: glide the target forward at the reported climb
+            // speed so the picture keeps moving smoothly between packets,
+            // then ease the camera onto it.
+            let predicted = target + remoteCameraVelocityY * dt
+            remoteCameraTargetY = predicted
             let halfHeight = size.height / 2
-            let clamped = min(max(target, worldRect.minY + halfHeight),
+            let clamped = min(max(predicted, worldRect.minY + halfHeight),
                               worldRect.maxY - halfHeight)
-            let blend = min(1, 10 * dt)
+            let blend = min(1, 6 * dt)
             cameraNode.position.y += (clamped - cameraNode.position.y) * blend
             generateBands(upTo: cameraNode.position.y + size.height * 1.8)
             pruneBands(below: cameraNode.position.y - size.height * 2)
             layoutFloorTiles()
+        }
+
+        // Ready gate up: the world is on show but frozen until both sides
+        // have pressed READY.
+        if isHoldingForReady {
+            body.velocity = .zero
+            return
         }
 
         guard ballIsHere else { return }
@@ -1192,13 +1226,14 @@ final class GameScene: SKScene {
         followBallWithCamera()
         layoutFloorTiles()
 
-        // Co-op: stream this camera's height and the shared score to the
-        // watching phone, ~12 times a second.
+        // Co-op: stream this camera's height, climb speed and the shared
+        // score to the watching phone, ~30 times a second.
         if isCoop, peerConnected,
-           currentTime - lastCoopSyncTime > 0.08 {
+           currentTime - lastCoopSyncTime > 0.033 {
             lastCoopSyncTime = currentTime
             multipeer.send(.coopSync(
                 heightOffset: Double(cameraNode.position.y - runStartY),
+                heightVelocity: Double(body.velocity.dy),
                 scoreMeters: scoreMeters
             ), reliable: false)
         }
@@ -1421,7 +1456,16 @@ final class GameScene: SKScene {
         sub.zPosition = 100
         cameraNode.addChild(sub)
 
-        // The run only restarts when the player taps TRY AGAIN.
+        // The run only restarts when the player taps TRY AGAIN (both
+        // players, in co-op).
+        let button = makeGateButton(text: L10n.t("もういちど", "TRY AGAIN"))
+        cameraNode.addChild(button)
+        tryAgainButton = button
+        awaitingRestart = true
+    }
+
+    /// The big orange pill used for TRY AGAIN and the co-op READY gate.
+    private func makeGateButton(text: String) -> SKShapeNode {
         let button = SKShapeNode(rectOf: CGSize(width: 230, height: 62),
                                  cornerRadius: 31)
         button.fillColor = SKColor(red: 1.0, green: 0.45, blue: 0.25, alpha: 1)
@@ -1430,7 +1474,7 @@ final class GameScene: SKScene {
         button.position = CGPoint(x: 0, y: -78)
         button.zPosition = 100
 
-        let label = SKLabelNode(text: L10n.t("もういちど", "TRY AGAIN"))
+        let label = SKLabelNode(text: text)
         label.fontName = "AvenirNext-Heavy"
         label.fontSize = 24
         label.fontColor = .white
@@ -1438,13 +1482,10 @@ final class GameScene: SKScene {
         button.addChild(label)
 
         button.setScale(0.1)
-        cameraNode.addChild(button)
-        let buttonIn = SKAction.scale(to: 1.0, duration: 0.3)
-        buttonIn.timingMode = .easeOut
-        button.run(.sequence([.wait(forDuration: 0.4), buttonIn]))
-
-        tryAgainButton = button
-        awaitingRestart = true
+        let pop = SKAction.scale(to: 1.0, duration: 0.3)
+        pop.timingMode = .easeOut
+        button.run(.sequence([.wait(forDuration: 0.4), pop]))
+        return button
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -1453,21 +1494,24 @@ final class GameScene: SKScene {
         let location = touch.location(in: cameraNode)
         // A roomy hit box — mid-game-over is no time for precision tapping.
         guard button.frame.insetBy(dx: -20, dy: -20).contains(location) else { return }
-        awaitingRestart = false
-        tryAgainButton = nil
-        // Co-op: one tap restarts the shared run on both phones.
         if isCoop, peerConnected {
-            multipeer.send(.restartRun)
+            // Shared runs wait for BOTH players' buttons.
+            handleLocalReadyTap(on: button)
+        } else {
+            awaitingRestart = false
+            tryAgainButton = nil
+            startRun()
         }
-        startRun()
     }
 
     // MARK: - Co-op shared run (one ball, one camera, one score)
 
     /// The phone holding the ball reported its camera height and score.
-    private func receiveCoopSync(heightOffset: Double, scoreMeters score: Int) {
+    private func receiveCoopSync(heightOffset: Double, heightVelocity: Double,
+                                 scoreMeters score: Int) {
         guard isCoop else { return }
         remoteCameraTargetY = runStartY + CGFloat(heightOffset)
+        remoteCameraVelocityY = CGFloat(heightVelocity)
         // The score is shared: never let the display fall behind the peer.
         let sharedHeight = runStartY + CGFloat(score) * GameScene.pointsPerMeter
         if sharedHeight > maxHeight {
@@ -1497,10 +1541,55 @@ final class GameScene: SKScene {
         showGameOver(finalScore: max(score, scoreMeters))
     }
 
-    /// TRY AGAIN was tapped on the other phone: restart together.
-    private func receivePeerRestart() {
+    /// The other player pressed READY / TRY AGAIN.
+    private func receivePeerReady() {
         guard isCoop else { return }
+        peerReady = true
+        maybeBeginCoopRun()
+    }
+
+    /// Once BOTH players have pressed their button, the shared run
+    /// (re)starts on this phone. The peer runs the same check when our
+    /// readyToStart reaches them, so the two starts happen together.
+    private func maybeBeginCoopRun() {
+        guard localReady, peerReady else { return }
+        clearReadyGate()
         startRun()
+    }
+
+    /// Freeze the freshly built world behind a READY button (shown right
+    /// after the two phones connect).
+    private func presentReadyGate() {
+        isHoldingForReady = true
+        localReady = false
+        peerReady = false
+        awaitingRestart = true
+        let button = makeGateButton(text: L10n.t("じゅんびOK！", "READY!"))
+        cameraNode.addChild(button)
+        tryAgainButton = button
+    }
+
+    private func clearReadyGate() {
+        isHoldingForReady = false
+        localReady = false
+        peerReady = false
+        awaitingRestart = false
+        tryAgainButton?.removeFromParent()
+        tryAgainButton = nil
+    }
+
+    /// The local player pressed their gate button: mark ready, tell the
+    /// peer, and turn the button into a "waiting" state.
+    private func handleLocalReadyTap(on button: SKNode) {
+        awaitingRestart = false
+        localReady = true
+        multipeer.send(.readyToStart)
+        button.alpha = 0.7
+        if let label = button.children.compactMap({ $0 as? SKLabelNode }).first {
+            label.text = L10n.t("あいてをまってるよ…", "Waiting for your friend…")
+            label.fontSize = 15
+        }
+        maybeBeginCoopRun()
     }
 
     // MARK: - Vertical drop between phones (Milestone 4)
@@ -2423,13 +2512,14 @@ enum PeerMessage: Codable {
     /// other over UWB and learn their physical arrangement.
     case uwbToken(Data)
     /// Co-op: the phone holding the ball streams its camera height (as an
-    /// offset from the run start) and the shared score, so the other
-    /// screen scrolls along and shows the same distance.
-    case coopSync(heightOffset: Double, scoreMeters: Int)
+    /// offset from the run start), the ball's vertical speed (so the
+    /// watching screen can predict between packets), and the shared score.
+    case coopSync(heightOffset: Double, heightVelocity: Double, scoreMeters: Int)
     /// Co-op: the shared run ended on the sender's screen.
     case runOver(scoreMeters: Int)
-    /// Co-op: TRY AGAIN was tapped on the sender's screen.
-    case restartRun
+    /// Co-op: this player pressed READY / TRY AGAIN. The run (re)starts
+    /// once both phones have sent one.
+    case readyToStart
 }
 
 /// Everything the ball carries when it rolls to the neighboring phone.
