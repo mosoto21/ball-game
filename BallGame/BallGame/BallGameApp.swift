@@ -38,8 +38,14 @@ struct GameView: View {
             if mode == nil {
                 MenuView { selected in
                     scene.setPlayMode(selected)
-                    scene.isGameStarted = false
-                    started = false
+                    // Solo gates behind the personal START overlay. The
+                    // multiplayer modes gate on the connection + both
+                    // players' READY instead, so no overlay there — the
+                    // scene shows "looking for the other iPhone" until
+                    // the peer arrives.
+                    let isSolo = selected == .solo
+                    scene.isGameStarted = !isSolo
+                    started = !isSolo
                     mode = selected
                 }
             } else {

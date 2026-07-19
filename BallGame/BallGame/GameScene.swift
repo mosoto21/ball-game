@@ -187,6 +187,10 @@ final class GameScene: SKScene {
     /// the same spot on the opponent's screen.
     private var versusHoles: [SKSpriteNode] = []
 
+    /// Big center message while a multiplayer mode waits for the second
+    /// phone — the game cannot start alone.
+    private let waitingLabel = SKLabelNode()
+
     /// Co-op ready gate: a shared run only (re)starts after BOTH players
     /// press the button (READY on connect, TRY AGAIN after a game over).
     private var isHoldingForReady = false
@@ -265,7 +269,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 51
+    private static let buildNumber = 52
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -867,6 +871,26 @@ final class GameScene: SKScene {
         connectionLabel.zPosition = 100
         updateConnectionLabel()
         cameraNode.addChild(connectionLabel)
+
+        attachWaitingLabel()
+    }
+
+    /// The frozen-board notice for multiplayer modes: nothing starts
+    /// until the second phone connects.
+    private func attachWaitingLabel() {
+        waitingLabel.text = L10n.t("あいてのiPhoneをさがしています…\nつながったらスタート！",
+                                   "Looking for the other iPhone…\nThe game starts once it connects!")
+        waitingLabel.numberOfLines = 0
+        waitingLabel.fontName = "AvenirNext-Bold"
+        waitingLabel.fontSize = 21
+        waitingLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.95)
+        waitingLabel.horizontalAlignmentMode = .center
+        waitingLabel.verticalAlignmentMode = .center
+        waitingLabel.position = .zero
+        waitingLabel.zPosition = 100
+        waitingLabel.isHidden = !(multiplayerEnabled && !peerConnected)
+        waitingLabel.removeFromParent()
+        cameraNode.addChild(waitingLabel)
     }
 
     private func updateConnectionLabel() {
@@ -1146,6 +1170,15 @@ final class GameScene: SKScene {
                 return
             }
         }
+
+        // Multiplayer never starts alone: until the second phone connects,
+        // the board sits frozen behind a "looking for…" message.
+        if multiplayerEnabled, !peerConnected {
+            waitingLabel.isHidden = false
+            body.velocity = .zero
+            return
+        }
+        waitingLabel.isHidden = true
 
         // The arrangement is live: follow it frame to frame. Side passing
         // opens the walls unless UWB says the phones are stacked.
@@ -1814,6 +1847,8 @@ final class GameScene: SKScene {
         connectionLabel.zPosition = 100
         updateConnectionLabel()
         cameraNode.addChild(connectionLabel)
+
+        attachWaitingLabel()
     }
 
     /// Build (or rebuild) the court: perimeter walls with 1–2 ball-sized
