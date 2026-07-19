@@ -179,6 +179,14 @@ final class GameScene: SKScene {
     /// Last time a coopSync message went out (throttled to ~30 Hz).
     private var lastCoopSyncTime: TimeInterval = 0
 
+    /// Floor holes sprinkled along the co-op climb. Strict setting: they
+    /// only open when the friend's phone is physically underneath (UWB).
+    /// Casual setting: the ball warps through them to the friend.
+    private var coopHoles: [SKSpriteNode] = []
+    /// Floor holes on the versus court; falling in pops the ball out of
+    /// the same spot on the opponent's screen.
+    private var versusHoles: [SKSpriteNode] = []
+
     /// Co-op ready gate: a shared run only (re)starts after BOTH players
     /// press the button (READY on connect, TRY AGAIN after a game over).
     private var isHoldingForReady = false
@@ -257,7 +265,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 50
+    private static let buildNumber = 51
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -361,6 +369,8 @@ final class GameScene: SKScene {
             case .readyToStart: self?.receivePeerReady()
             case .versusTransfer(let transfer): self?.receiveVersusBall(transfer)
             case .versusResult(let hold): self?.receiveVersusResult(holdSeconds: hold)
+            case .coopWarp(let drop): self?.receiveCoopWarp(drop)
+            case .versusHoleDrop(let drop): self?.receiveVersusHoleDrop(drop)
             }
         }
         nearby.onTokenReady = { [weak self] data in
@@ -388,6 +398,7 @@ final class GameScene: SKScene {
         voidZones.removeAll()
         bandNodes.removeAll()
         floorTiles.removeAll()
+        coopHoles.removeAll()
         isAirborne = false
         isFalling = false
         isTransitioning = false
@@ -730,9 +741,31 @@ final class GameScene: SKScene {
             if !nodes.isEmpty {
                 bandNodes.append((maxY: bandTop + 60, nodes: nodes))
             }
+
+            // Co-op: sprinkle a floor hole between bands now and then —
+            // the doorway down to the friend's phone.
+            if isCoop, CGFloat.random(in: 0...1) < 0.45 {
+                let hole = SKSpriteNode(
+                    texture: GameScene.holeTexture(radius: GameScene.holeRadius))
+                hole.position = CGPoint(
+                    x: CGFloat.random(in: 0.15...0.85) * size.width,
+                    y: bandTop + size.height * CGFloat.random(in: 0.16...0.30)
+                )
+                hole.zPosition = 2
+                addChild(hole)
+                coopHoles.append(hole)
+            }
+
             nextBandY = bandTop + size.height * CGFloat.random(
                 in: lerp(0.55, 0.32, d)...lerp(0.75, 0.46, d))
         }
+    }
+
+    private func pruneCoopHoles(below y: CGFloat) {
+        for hole in coopHoles where hole.position.y < y {
+            hole.removeFromParent()
+        }
+        coopHoles.removeAll { $0.position.y < y }
     }
 
     /// A chasm across the whole screen with one narrow bridge — narrower
@@ -1155,6 +1188,7 @@ final class GameScene: SKScene {
             cameraNode.position.y += step
             generateBands(upTo: cameraNode.position.y + size.height * 1.8)
             pruneBands(below: cameraNode.position.y - size.height * 2)
+            pruneCoopHoles(below: cameraNode.position.y - size.height * 2)
             layoutFloorTiles()
         }
 
@@ -1198,6 +1232,29 @@ final class GameScene: SKScene {
         // tear down what has fallen far behind.
         generateBands(upTo: cameraNode.position.y + size.height * 1.8)
         pruneBands(below: ball.position.y - size.height * 2)
+        pruneCoopHoles(below: ball.position.y - size.height * 2)
+
+        // Co-op floor holes. Strict: only a friend physically underneath
+        // opens the floor (the ball rolls straight over otherwise).
+        // Casual: the hole warps the ball to the friend, wherever they are.
+        if isCoop, peerConnected, !isAirborne, !isFalling, !isTransitioning,
+           !isDropGrace {
+            for hole in coopHoles {
+                let distance = hypot(ball.position.x - hole.position.x,
+                                     ball.position.y - hole.position.y)
+                guard distance < GameScene.holeRadius * 0.8 else { continue }
+                if UserDefaults.standard.bool(forKey: "coopHoleStrict") {
+                    if peerPlacement == .below,
+                       (nearby.distance ?? .greatestFiniteMagnitude)
+                           < GameScene.maxDropDistance {
+                        dropBallToPeer(at: ball.position)
+                    }
+                } else {
+                    warpBallToPeer(at: hole.position)
+                }
+                break
+            }
+        }
 
         // Score is the highest point reached this run.
         if ball.position.y > maxHeight {
@@ -1671,6 +1728,7 @@ final class GameScene: SKScene {
         cameraNode.removeAllChildren()
         floorTiles.removeAll()
         versusObstacleNodes.removeAll()
+        versusHoles.removeAll()
         propNodes.removeAll()
         isAirborne = false
         isFalling = false
@@ -1931,6 +1989,19 @@ final class GameScene: SKScene {
             let bumper = spawnObstacle(.bumper, at: freeSpot())
             versusObstacleNodes.append(bumper)
         }
+
+        // Floor holes: falling in pops the ball out of the same spot on
+        // the opponent's court — another way to pass the hot potato.
+        for hole in versusHoles { hole.removeFromParent() }
+        versusHoles.removeAll()
+        for _ in 0..<Int.random(in: 1...2) {
+            let hole = SKSpriteNode(
+                texture: GameScene.holeTexture(radius: GameScene.holeRadius))
+            hole.position = freeSpot()
+            hole.zPosition = 2
+            addChild(hole)
+            versusHoles.append(hole)
+        }
     }
 
     /// The versus frame: match clock, hot-potato accounting, steering,
@@ -2026,8 +2097,25 @@ final class GameScene: SKScene {
             return
         }
 
+        // A grounded ball over a floor hole drops through — and pops out
+        // of the same spot on the opponent's court. Hop to clear one.
+        if !isAirborne, !isFalling {
+            for hole in versusHoles {
+                let distance = hypot(ball.position.x - hole.position.x,
+                                     ball.position.y - hole.position.y)
+                guard distance < GameScene.holeRadius * 0.8 else { continue }
+                if peerConnected {
+                    sendVersusHole(from: hole)
+                } else {
+                    ball.position = startPosition
+                    body.velocity = .zero
+                }
+                return
+            }
+        }
+
         // Tilt steering, same feel as the climb.
-        if !isAirborne, var tilt = currentTilt() {
+        if !isAirborne, !isFalling, var tilt = currentTilt() {
             if abs(tilt.dx) < GameScene.deadZone { tilt.dx = 0 }
             if abs(tilt.dy) < GameScene.deadZone { tilt.dy = 0 }
 
@@ -2158,6 +2246,89 @@ final class GameScene: SKScene {
         if matchOver, !versusResultShown {
             showVersusResult(theirHold: holdSeconds)
         }
+    }
+
+    /// The ball dropped into a floor hole: sink, then pop out of the same
+    /// spot over there. This court reshuffles like any other transfer.
+    private func sendVersusHole(from hole: SKSpriteNode) {
+        guard let body = ball.physicsBody else { return }
+        isFalling = true
+        fallHaptic.impactOccurred()
+        let exitVelocity = body.velocity
+        body.velocity = .zero
+
+        let drop = BallDrop(
+            xOffsetPoints: Double(hole.position.x - cameraNode.position.x),
+            yOffsetPoints: Double(hole.position.y - cameraNode.position.y),
+            velocityDX: Double(exitVelocity.dx),
+            velocityDY: Double(exitVelocity.dy),
+            colorIndex: displayedColorIndex,
+            patternIndex: displayedPatternIndex,
+            skinPNG: displayedPatternIndex == BallPattern.custom.rawValue
+                ? displayedSkinData : nil
+        )
+        multipeer.send(.versusHoleDrop(drop))
+
+        let suck = SKAction.group([
+            .move(to: hole.position, duration: 0.12),
+            .scale(to: 0.08, duration: 0.3),
+            .fadeOut(withDuration: 0.3),
+        ])
+        suck.timingMode = .easeIn
+        shadow.run(.fadeOut(withDuration: 0.2))
+        ball.run(.sequence([suck, .run { [weak self] in
+            guard let self else { return }
+            self.ball.isHidden = true
+            self.ballIsHere = false
+            self.isFalling = false
+            self.ball.setScale(1)
+            self.ball.alpha = 1
+            self.shadow.isHidden = true
+            self.shadow.alpha = 1
+            self.regenerateVersusLayout(clearPoint: nil)
+        }]))
+    }
+
+    /// The opponent's ball fell through a hole: it pops out of the same
+    /// screen spot here, arriving from above.
+    private func receiveVersusHoleDrop(_ drop: BallDrop) {
+        guard isVersus, !matchOver else { return }
+
+        let margin = GameScene.ballRadius * 2
+        var entry = CGPoint(
+            x: cameraNode.position.x + CGFloat(drop.xOffsetPoints),
+            y: cameraNode.position.y + CGFloat(drop.yOffsetPoints)
+        )
+        entry.x = min(max(entry.x, worldRect.minX + margin), worldRect.maxX - margin)
+        entry.y = min(max(entry.y, worldRect.minY + margin), worldRect.maxY - margin)
+
+        regenerateVersusLayout(clearPoint: entry)
+
+        displayedColorIndex = drop.colorIndex
+        displayedPatternIndex = drop.patternIndex
+        displayedSkinData = drop.skinPNG
+        applyDisplayedStyle()
+
+        ballIsHere = true
+        isAirborne = false
+        isFalling = false
+        ball.removeAllActions()
+        shadow.removeAllActions()
+        ball.isHidden = false
+        ball.alpha = 1
+        ball.position = entry
+        ball.setScale(1.6) // arrives from above and settles
+        ball.physicsBody?.velocity = CGVector(dx: drop.velocityDX,
+                                              dy: drop.velocityDY)
+        shadow.isHidden = false
+        shadow.alpha = 1
+        shadow.setScale(1)
+        shadow.position = entry
+
+        landingHaptic.impactOccurred()
+        let settle = SKAction.scale(to: 1.0, duration: 0.14)
+        settle.timingMode = .easeIn
+        ball.run(settle)
     }
 
     private func showVersusResult(theirHold: Double) {
@@ -2451,6 +2622,133 @@ final class GameScene: SKScene {
             squash,
         ]))
         showToast(L10n.t("キャッチ！", "Catch!"))
+    }
+
+    // MARK: - Casual hole warp (co-op, "position doesn't matter" setting)
+
+    /// The ball fell into a casual co-op hole: sink into it, then teleport
+    /// to the friend's phone — no stacking, no catch check.
+    private func warpBallToPeer(at point: CGPoint) {
+        guard let body = ball.physicsBody else { return }
+        isFalling = true
+        fallHaptic.impactOccurred()
+        let exitVelocity = body.velocity
+        body.velocity = .zero
+
+        let drop = BallDrop(
+            xOffsetPoints: Double(point.x - cameraNode.position.x),
+            yOffsetPoints: Double(point.y - cameraNode.position.y),
+            velocityDX: Double(exitVelocity.dx),
+            velocityDY: Double(exitVelocity.dy),
+            colorIndex: displayedColorIndex,
+            patternIndex: displayedPatternIndex,
+            skinPNG: displayedPatternIndex == BallPattern.custom.rawValue
+                ? displayedSkinData : nil
+        )
+        multipeer.send(.coopWarp(drop))
+
+        let suck = SKAction.group([
+            .move(to: point, duration: 0.12),
+            .scale(to: 0.08, duration: 0.3),
+            .fadeOut(withDuration: 0.3),
+        ])
+        suck.timingMode = .easeIn
+        shadow.run(.fadeOut(withDuration: 0.2))
+        ball.run(.sequence([suck, .run { [weak self] in
+            guard let self else { return }
+            self.ball.isHidden = true
+            self.ballIsHere = false
+            self.isFalling = false
+            self.ball.setScale(1)
+            self.ball.alpha = 1
+            self.shadow.isHidden = true
+            self.shadow.alpha = 1
+        }]))
+    }
+
+    /// A warped ball arrives: swelling shadow, then it always lands —
+    /// this is the casual setting, no catch requirements.
+    private func receiveCoopWarp(_ drop: BallDrop) {
+        guard isCoop else { return }
+        ball.removeAllActions()
+        shadow.removeAllActions()
+        removeAction(forKey: "dropTimeout")
+        isFalling = false
+        isAirborne = false
+        awaitingDropResult = false
+        ballIsHere = false
+        ball.isHidden = true
+        shadow.isHidden = true
+        ball.physicsBody?.velocity = .zero
+
+        displayedColorIndex = drop.colorIndex
+        displayedPatternIndex = drop.patternIndex
+        displayedSkinData = drop.skinPNG
+        applyDisplayedStyle()
+
+        let landing = CGPoint(
+            x: cameraNode.position.x + CGFloat(drop.xOffsetPoints),
+            y: cameraNode.position.y + CGFloat(drop.yOffsetPoints)
+        )
+        let clamped = clampToWorld(safeLandingPoint(clampToWorld(landing)))
+
+        landingHaptic.prepare()
+        let dropShadow = SKSpriteNode(
+            texture: GameScene.softShadowTexture(radius: GameScene.ballRadius))
+        dropShadow.position = clamped
+        dropShadow.zPosition = 5
+        dropShadow.setScale(0.2)
+        dropShadow.alpha = 0.2
+        addChild(dropShadow)
+
+        let swell = SKAction.group([
+            .scale(to: 1.35, duration: GameScene.dropFallDuration),
+            .fadeAlpha(to: 1.0, duration: GameScene.dropFallDuration),
+        ])
+        swell.timingMode = .easeIn
+        let velocity = CGVector(dx: drop.velocityDX, dy: drop.velocityDY)
+        dropShadow.run(.sequence([
+            swell,
+            .run { [weak self] in
+                self?.landWarpedBall(at: clamped, velocity: velocity)
+            },
+            .removeFromParent(),
+        ]))
+    }
+
+    /// Place the warped ball on this screen with the arrival squash.
+    private func landWarpedBall(at point: CGPoint, velocity: CGVector) {
+        ballIsHere = true
+        ball.isHidden = false
+        ball.alpha = 1
+        ball.position = point
+        ball.setScale(1.6)
+        ball.physicsBody?.velocity = velocity
+        shadow.isHidden = false
+        shadow.alpha = 1
+        shadow.setScale(1)
+        shadow.position = point
+
+        // Immunity so the landing spot's own hole can't swallow it back.
+        isDropGrace = true
+        run(.sequence([
+            .wait(forDuration: GameScene.catchGraceDuration),
+            .run { [weak self] in self?.isDropGrace = false },
+        ]), withKey: "dropGrace")
+
+        let settle = SKAction.scale(to: 1.0, duration: 0.14)
+        settle.timingMode = .easeIn
+        let squash = SKAction.sequence([
+            .scaleX(to: 1.22, y: 0.78, duration: 0.07),
+            .scaleX(to: 0.94, y: 1.06, duration: 0.08),
+            .scaleX(to: 1.0, y: 1.0, duration: 0.07),
+        ])
+        ball.run(.sequence([
+            settle,
+            .run { [weak self] in self?.didLand() },
+            squash,
+        ]))
+        showToast(L10n.t("ワープしてきた！", "Warped in!"))
     }
 
     /// A short message that pops in under the level label and fades away.
@@ -3142,6 +3440,12 @@ enum PeerMessage: Codable {
     /// Versus: the sender's 60-second clock ran out; here is how long they
     /// held the ball. Each phone compares the two numbers to pick a winner.
     case versusResult(holdSeconds: Double)
+    /// Co-op, casual holes: the ball fell into a floor hole and warps to
+    /// the other phone — no physical stacking required, it always lands.
+    case coopWarp(BallDrop)
+    /// Versus: the ball fell into a floor hole and pops out of the same
+    /// spot on the opponent's court.
+    case versusHoleDrop(BallDrop)
 }
 
 /// Everything the ball carries when it escapes to the opponent's screen.

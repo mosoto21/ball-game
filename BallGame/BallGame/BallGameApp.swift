@@ -157,6 +157,9 @@ struct GameView: View {
 struct MenuView: View {
     let onSelect: (GameScene.PlayMode) -> Void
     @AppStorage("ballColor") private var ballColor = 0
+    /// Co-op floor holes: true = the ball only falls when the friend's
+    /// phone is physically underneath (UWB); false = it always warps over.
+    @AppStorage("coopHoleStrict") private var coopHoleStrict = false
 
     var body: some View {
         ZStack {
@@ -206,6 +209,29 @@ struct MenuView: View {
                                           "Two phones, one shared ball\nShared score and camera\nSide passes and underneath catches"),
                         icon: "person.2.fill"
                     ) { onSelect(.coop) }
+
+                    Toggle(isOn: $coopHoleStrict) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.t("あなのリアル判定", "Realistic holes"))
+                                .font(.system(.subheadline, design: .rounded))
+                                .fontWeight(.bold)
+                            Text(coopHoleStrict
+                                 ? L10n.t("ほんとうに真下にスマホがある時だけ落ちる",
+                                          "The ball only falls when a phone is really underneath")
+                                 : L10n.t("スマホの位置に関係なく、あなからワープする",
+                                          "The ball warps through holes, wherever the phones are"))
+                                .font(.system(.caption2, design: .rounded))
+                                .opacity(0.7)
+                        }
+                    }
+                    .tint(Color(red: 1.0, green: 0.45, blue: 0.25))
+                    .foregroundStyle(Color(red: 0.25, green: 0.15, blue: 0.08))
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 18)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(.white.opacity(0.55))
+                    )
 
                     modeButton(
                         title: L10n.t("たいせんモード", "Versus"),
