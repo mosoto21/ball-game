@@ -209,7 +209,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 43
+    private static let buildNumber = 44
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -271,8 +271,8 @@ final class GameScene: SKScene {
     /// The collapse's climb speed (points/s) at difficulty 0 and 1.
     /// The ball's own top speed is 1100 — at full difficulty the chase
     /// eats half of that, so climbing must be near constant.
-    private static let chaseBaseSpeed: CGFloat = 180
-    private static let chaseMaxSpeed: CGFloat = 520
+    private static let chaseBaseSpeed: CGFloat = 130
+    private static let chaseMaxSpeed: CGFloat = 400
     /// The collapse never falls further behind the ball than this many
     /// screens — being good buys breathing room, never a pause.
     private static let chaseMaxLag: CGFloat = 1.3
