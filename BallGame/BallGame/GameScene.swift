@@ -170,6 +170,10 @@ final class GameScene: SKScene {
     /// The peer camera's climb speed (points/s); advances the target
     /// between packets so the follow reads as one continuous glide.
     private var remoteCameraVelocityY: CGFloat = 0
+    /// Seconds since the last coopSync packet. Dead reckoning only runs
+    /// while this is fresh — extrapolating through a real packet drought
+    /// would send the camera sailing off on its own.
+    private var remoteSyncAge: TimeInterval = 0
     /// Last time a coopSync message went out (throttled to ~30 Hz).
     private var lastCoopSyncTime: TimeInterval = 0
 
@@ -251,7 +255,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 48
+    private static let buildNumber = 49
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -432,7 +436,7 @@ final class GameScene: SKScene {
         addChild(shadow)
 
         setUpHUD()
-        followBallWithCamera()
+        followBallWithCamera(snap: true)
         layoutFloorTiles()
         generateBands(upTo: cameraNode.position.y + size.height * 1.8)
     }
@@ -1129,15 +1133,24 @@ final class GameScene: SKScene {
         // borrowed camera so there's something to look at (and to land on).
         if isCoop, !ballIsHere, let target = remoteCameraTargetY {
             // Dead-reckon: glide the target forward at the reported climb
-            // speed so the picture keeps moving smoothly between packets,
-            // then ease the camera onto it.
-            let predicted = target + remoteCameraVelocityY * dt
+            // speed so the picture keeps moving smoothly between packets —
+            // but only while packets are fresh. During a drought the
+            // target holds still instead of sailing away on stale speed.
+            remoteSyncAge += TimeInterval(dt)
+            let predicted = remoteSyncAge < 0.3
+                ? target + remoteCameraVelocityY * dt
+                : target
             remoteCameraTargetY = predicted
             let halfHeight = size.height / 2
             let clamped = min(max(predicted, worldRect.minY + halfHeight),
                               worldRect.maxY - halfHeight)
             let blend = min(1, 6 * dt)
-            cameraNode.position.y += (clamped - cameraNode.position.y) * blend
+            var step = (clamped - cameraNode.position.y) * blend
+            // Never sweep faster than a real climb could move the camera,
+            // so a corrected target is caught with a quick glide, not a yank.
+            let maxStep = 1500 * dt
+            step = min(max(step, -maxStep), maxStep)
+            cameraNode.position.y += step
             generateBands(upTo: cameraNode.position.y + size.height * 1.8)
             pruneBands(below: cameraNode.position.y - size.height * 2)
             layoutFloorTiles()
@@ -1279,13 +1292,25 @@ final class GameScene: SKScene {
     }
 
     /// Keep the ball in view, clamping so the camera never shows past the
-    /// edge of the world.
-    private func followBallWithCamera() {
+    /// edge of the world. The follow is lightly smoothed so a ball that
+    /// teleports in (a transfer from the other phone) is caught with a
+    /// quick glide instead of a hard cut; `snap` skips the smoothing for
+    /// fresh runs.
+    private func followBallWithCamera(snap: Bool = false) {
         let halfWidth = size.width / 2
         let halfHeight = size.height / 2
-        cameraNode.position = CGPoint(
+        let target = CGPoint(
             x: min(max(ball.position.x, worldRect.minX + halfWidth), worldRect.maxX - halfWidth),
             y: min(max(ball.position.y, worldRect.minY + halfHeight), worldRect.maxY - halfHeight)
+        )
+        if snap {
+            cameraNode.position = target
+            return
+        }
+        let blend: CGFloat = 0.35
+        cameraNode.position = CGPoint(
+            x: cameraNode.position.x + (target.x - cameraNode.position.x) * blend,
+            y: cameraNode.position.y + (target.y - cameraNode.position.y) * blend
         )
     }
 
@@ -1551,6 +1576,7 @@ final class GameScene: SKScene {
         guard isCoop else { return }
         remoteCameraTargetY = runStartY + CGFloat(heightOffset)
         remoteCameraVelocityY = CGFloat(heightVelocity)
+        remoteSyncAge = 0
         // The score is shared: never let the display fall behind the peer.
         let sharedHeight = runStartY + CGFloat(score) * GameScene.pointsPerMeter
         if sharedHeight > maxHeight {
@@ -1643,6 +1669,7 @@ final class GameScene: SKScene {
         cameraNode.removeAllChildren()
         floorTiles.removeAll()
         versusObstacleNodes.removeAll()
+        propNodes.removeAll()
         isAirborne = false
         isFalling = false
         isTransitioning = false
@@ -1732,7 +1759,13 @@ final class GameScene: SKScene {
     /// free of obstacles.
     private func regenerateVersusLayout(clearPoint: CGPoint?) {
         wallsNode.removeAllChildren()
-        for node in versusObstacleNodes { node.removeFromParent() }
+        for node in versusObstacleNodes {
+            node.removeFromParent()
+            if let sprite = node as? SKSpriteNode,
+               let index = propNodes.firstIndex(of: sprite) {
+                propNodes.remove(at: index)
+            }
+        }
         versusObstacleNodes.removeAll()
 
         // 1–2 gaps on distinct edges.
@@ -1840,20 +1873,10 @@ final class GameScene: SKScene {
             versusObstacleNodes.append(bar)
         }
 
-        // …and three pinball bumpers that fling it right back.
+        // …and three of the same mushroom bumpers the climb uses, with
+        // the same pinball kick.
         for _ in 0..<3 {
-            let bumper = SKShapeNode(circleOfRadius: 22)
-            bumper.fillColor = SKColor(red: 0.86, green: 0.22, blue: 0.22, alpha: 1)
-            bumper.strokeColor = SKColor(white: 1, alpha: 0.9)
-            bumper.lineWidth = 4
-            bumper.position = freeSpot()
-            bumper.zPosition = 6
-            let body = SKPhysicsBody(circleOfRadius: 22)
-            body.isDynamic = false
-            body.restitution = 1.0
-            body.friction = 0
-            bumper.physicsBody = body
-            addChild(bumper)
+            let bumper = spawnObstacle(.bumper, at: freeSpot())
             versusObstacleNodes.append(bumper)
         }
     }
