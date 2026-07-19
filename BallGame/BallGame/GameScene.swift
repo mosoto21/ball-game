@@ -251,7 +251,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 47
+    private static let buildNumber = 48
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -1742,8 +1742,9 @@ final class GameScene: SKScene {
             let edge = edges.removeFirst()
             let length = edge >= 2 ? worldRect.width : worldRect.height
             let center = CGFloat.random(in: 0.22...0.78) * length
-            gaps.append((edge, (center - GameScene.versusGapHalf)
-                            ...(center + GameScene.versusGapHalf)))
+            let lower = center - GameScene.versusGapHalf
+            let upper = center + GameScene.versusGapHalf
+            gaps.append((edge, lower...upper))
         }
 
         let wallColor = SKColor(red: 0.45, green: 0.32, blue: 0.18, alpha: 1)
