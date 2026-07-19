@@ -158,6 +158,16 @@ final class GameScene: SKScene {
     private var matchOver = false
     /// The hold time the opponent reported at match end.
     private var peerHoldReported: Double?
+    /// The opponent's live hold time from their heartbeat (better than
+    /// estimating it from the elapsed clock).
+    private var peerHoldLive: Double?
+    /// Seconds since the opponent's last heartbeat while they hold the
+    /// ball; a long silence means the ball got lost in transit.
+    private var versusPeerSilence: TimeInterval = 0
+    private var lastVersusSyncSent: TimeInterval = 0
+    /// Ready handshake resend timer (a lost readyToStart would otherwise
+    /// leave both phones waiting forever).
+    private var lastReadyResend: TimeInterval = 0
     private var versusResultShown = false
     /// True once the timer entered its final-10-seconds alarm look.
     private var versusTimerUrgent = false
@@ -269,7 +279,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 53
+    private static let buildNumber = 54
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -375,6 +385,7 @@ final class GameScene: SKScene {
             case .versusResult(let hold): self?.receiveVersusResult(holdSeconds: hold)
             case .coopWarp(let drop): self?.receiveCoopWarp(drop)
             case .versusHoleDrop(let drop): self?.receiveVersusHoleDrop(drop)
+            case .versusSync(let hold): self?.receiveVersusSync(holdSeconds: hold)
             }
         }
         nearby.onTokenReady = { [weak self] data in
@@ -1180,6 +1191,16 @@ final class GameScene: SKScene {
         }
         waitingLabel.isHidden = true
 
+        // Insurance for the ready handshake: while we're ready and the
+        // peer seemingly isn't, re-announce every second in case the
+        // original readyToStart got lost — otherwise both phones would
+        // wait on each other forever.
+        if multiplayerEnabled, localReady, !peerReady,
+           currentTime - lastReadyResend > 1.0 {
+            lastReadyResend = currentTime
+            multipeer.send(.readyToStart)
+        }
+
         // The arrangement is live: follow it frame to frame. Side passing
         // opens the walls unless UWB says the phones are stacked.
         let placement = peerPlacement
@@ -1199,12 +1220,23 @@ final class GameScene: SKScene {
         // the friend's screen reports, so both players watch the same
         // stretch of the climb. The course keeps generating under the
         // borrowed camera so there's something to look at (and to land on).
+        // Co-op safety net: the holder streams sync at ~30 Hz, so a long
+        // silence while the ball is "over there" means the transfer was
+        // lost mid-flight — bring the ball back instead of freezing.
+        if isCoop, !ballIsHere {
+            remoteSyncAge += TimeInterval(dt)
+            if !isHoldingForReady, !awaitingRestart, remoteSyncAge > 3 {
+                remoteSyncAge = 0
+                respawnBall()
+                showToast(L10n.t("ボールがもどってきた", "The ball came back"))
+            }
+        }
+
         if isCoop, !ballIsHere, let target = remoteCameraTargetY {
             // Dead-reckon: glide the target forward at the reported climb
             // speed so the picture keeps moving smoothly between packets —
             // but only while packets are fresh. During a drought the
             // target holds still instead of sailing away on stale speed.
-            remoteSyncAge += TimeInterval(dt)
             let predicted = remoteSyncAge < 0.3
                 ? target + remoteCameraVelocityY * dt
                 : target
@@ -1774,6 +1806,8 @@ final class GameScene: SKScene {
         myHoldTime = 0
         matchOver = false
         peerHoldReported = nil
+        peerHoldLive = nil
+        versusPeerSilence = 0
         versusResultShown = false
 
         worldRect = CGRect(origin: .zero, size: size)
@@ -2108,6 +2142,32 @@ final class GameScene: SKScene {
             myHoldTime += TimeInterval(dt)
         }
 
+        // Heartbeat while holding the ball; reclaim it if the opponent's
+        // heartbeat goes silent for long (the transfer was lost).
+        if ballIsHere {
+            if currentTime - lastVersusSyncSent > 0.2 {
+                lastVersusSyncSent = currentTime
+                multipeer.send(.versusSync(holdSeconds: myHoldTime),
+                               reliable: false)
+            }
+        } else {
+            versusPeerSilence += TimeInterval(dt)
+            if versusPeerSilence > 3 {
+                versusPeerSilence = 0
+                ballIsHere = true
+                ball.removeAllActions()
+                ball.isHidden = false
+                ball.alpha = 1
+                ball.setScale(1)
+                ball.position = startPosition
+                body.velocity = .zero
+                shadow.removeAllActions()
+                shadow.isHidden = false
+                shadow.alpha = 1
+                showToast(L10n.t("ボールがもどってきた", "The ball came back"))
+            }
+        }
+
         let remaining = max(0, GameScene.versusMatchSeconds - elapsed)
         let remainingSeconds = Int(ceil(remaining))
         versusTimerLabel.text = L10n.t("のこり \(remainingSeconds)秒",
@@ -2125,7 +2185,7 @@ final class GameScene: SKScene {
             versusTimerLabel.run(.repeatForever(pulse), withKey: "timerPulse")
         }
         if peerConnected {
-            let theirHold = max(0, elapsed - myHoldTime)
+            let theirHold = peerHoldLive ?? max(0, elapsed - myHoldTime)
             versusHoldLabel.text = L10n.t(
                 String(format: "もってた時間  きみ %.1f ・ あいて %.1f（少ないほうが勝ち）",
                        myHoldTime, theirHold),
@@ -2317,8 +2377,8 @@ final class GameScene: SKScene {
                 .wait(forDuration: 2.5),
                 .run { [weak self] in
                     guard let self, !self.versusResultShown else { return }
-                    self.showVersusResult(theirHold:
-                        max(0, GameScene.versusMatchSeconds - self.myHoldTime))
+                    self.showVersusResult(theirHold: self.peerHoldLive
+                        ?? max(0, GameScene.versusMatchSeconds - self.myHoldTime))
                 },
             ]), withKey: "versusResultTimeout")
         }
@@ -2330,6 +2390,14 @@ final class GameScene: SKScene {
         if matchOver, !versusResultShown {
             showVersusResult(theirHold: holdSeconds)
         }
+    }
+
+    /// The opponent's heartbeat: they still hold the ball, and this is
+    /// their hold time so far.
+    private func receiveVersusSync(holdSeconds: Double) {
+        guard isVersus else { return }
+        versusPeerSilence = 0
+        peerHoldLive = holdSeconds
     }
 
     /// The ball dropped into a floor hole: sink, then pop out of the same
@@ -3530,6 +3598,10 @@ enum PeerMessage: Codable {
     /// Versus: the ball fell into a floor hole and pops out of the same
     /// spot on the opponent's court.
     case versusHoleDrop(BallDrop)
+    /// Versus heartbeat from the phone holding the ball (~5 Hz), carrying
+    /// its live hold time. Doubles as proof the ball still exists — a long
+    /// silence on the other side triggers a ball reclaim.
+    case versusSync(holdSeconds: Double)
 }
 
 /// Everything the ball carries when it escapes to the opponent's screen.
