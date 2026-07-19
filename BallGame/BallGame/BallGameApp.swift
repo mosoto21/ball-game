@@ -209,11 +209,10 @@ struct MenuView: View {
 
                     modeButton(
                         title: L10n.t("たいせんモード", "Versus"),
-                        subtitle: L10n.t("じゅんびちゅう…おたのしみに！",
-                                          "Coming soon…"),
-                        icon: "flag.checkered.2.crossed",
-                        disabled: true
-                    ) {}
+                        subtitle: L10n.t("60秒のホットポテト！かべの穴からボールを\nあいての画面におしつけろ\nもってた時間が短いほうの勝ち",
+                                          "60-second hot potato!\nShove the ball through a wall gap\nonto their screen — hold it less to win"),
+                        icon: "flag.checkered.2.crossed"
+                    ) { onSelect(.versus) }
                 }
                 .padding(.horizontal, 32)
             }

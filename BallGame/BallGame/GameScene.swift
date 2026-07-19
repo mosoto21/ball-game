@@ -144,6 +144,25 @@ final class GameScene: SKScene {
     private var playMode = PlayMode.solo
     private var multiplayerEnabled: Bool { playMode != .solo }
     private var isCoop: Bool { playMode == .coop }
+    private var isVersus: Bool { playMode == .versus }
+
+    // MARK: Versus state
+
+    /// When the 60-second match clock started (first frame after both
+    /// pressed READY). nil while waiting for an opponent.
+    private var matchStartTime: TimeInterval?
+    /// Seconds the ball has spent on THIS screen this match. Less is
+    /// better — hot-potato rules.
+    private var myHoldTime: TimeInterval = 0
+    /// The clock ran out; the board is frozen while results settle.
+    private var matchOver = false
+    /// The hold time the opponent reported at match end.
+    private var peerHoldReported: Double?
+    private var versusResultShown = false
+    private let versusTimerLabel = SKLabelNode()
+    private let versusHoldLabel = SKLabelNode()
+    /// Maze bars and bumpers of the current versus board.
+    private var versusObstacleNodes: [SKNode] = []
 
     /// Co-op, while the ball is on the other phone: the camera height the
     /// peer last reported, which this screen glides toward.
@@ -217,8 +236,10 @@ final class GameScene: SKScene {
         // arrangement state here so walls start closed until UWB speaks.
         sidePassOpen = false
         lastPlacement = .unknown
-        rebuildWalls()
         updateConnectionLabel()
+        // Each mode has its own board (climb vs. walled court), so picking
+        // one rebuilds the world from scratch.
+        startRun()
     }
     private let connectionLabel = SKLabelNode()
     /// The style the ball is currently wearing. Travels with the ball, so a
@@ -230,7 +251,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 46
+    private static let buildNumber = 47
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -299,6 +320,10 @@ final class GameScene: SKScene {
     private static let chaseMaxLag: CGFloat = 1.3
     /// Head start (screens below the start) before the collapse arrives.
     private static let chaseHeadStart: CGFloat = 1.1
+    /// Length of a versus match.
+    private static let versusMatchSeconds: TimeInterval = 60
+    /// Half-width of a wall gap the ball can slip through (versus).
+    private static let versusGapHalf: CGFloat = GameScene.ballRadius * 1.9
 
     // MARK: - Scene lifecycle
 
@@ -328,6 +353,8 @@ final class GameScene: SKScene {
                                       scoreMeters: score)
             case .runOver(let score): self?.receivePeerRunOver(scoreMeters: score)
             case .readyToStart: self?.receivePeerReady()
+            case .versusTransfer(let transfer): self?.receiveVersusBall(transfer)
+            case .versusResult(let hold): self?.receiveVersusResult(holdSeconds: hold)
             }
         }
         nearby.onTokenReady = { [weak self] data in
@@ -342,6 +369,10 @@ final class GameScene: SKScene {
     /// obstacle course is generated randomly as the ball climbs, so every
     /// run — and every phone — gets its own layout.
     private func startRun() {
+        if isVersus {
+            startVersusRound()
+            return
+        }
         removeAllActions()
         removeAllChildren()
         cameraNode.removeAllChildren()
@@ -1056,9 +1087,9 @@ final class GameScene: SKScene {
             }
             removeAction(forKey: "dropTimeout")
             updateConnectionLabel()
-            // Co-op: the peer left — dissolve any ready gate and carry on
-            // alone with the ball back on this screen.
-            if isCoop, !peerConnected {
+            // Co-op/versus: the peer left — dissolve any ready gate and
+            // carry on alone with the ball back on this screen.
+            if multiplayerEnabled, !peerConnected {
                 clearReadyGate()
                 startRun()
                 return
@@ -1067,10 +1098,10 @@ final class GameScene: SKScene {
                 startRun()
                 return
             }
-            // Co-op: on connect, build the fresh shared world (one ball,
-            // on the primary phone) but hold it frozen behind a READY
-            // button until both players have pressed theirs.
-            if peerConnected, isCoop {
+            // Co-op/versus: on connect, build the fresh shared board (one
+            // ball, on the primary phone) but hold it frozen behind a
+            // READY button until both players have pressed theirs.
+            if peerConnected, multiplayerEnabled {
                 startRun()
                 presentReadyGate()
                 return
@@ -1084,7 +1115,8 @@ final class GameScene: SKScene {
             lastPlacement = placement
             updateConnectionLabel()
         }
-        let wantSidePass = peerConnected
+        // Versus never opens the side walls — the only way out is a gap.
+        let wantSidePass = isCoop && peerConnected
             && placement != .below && placement != .above
         if wantSidePass != sidePassOpen {
             sidePassOpen = wantSidePass
@@ -1115,6 +1147,13 @@ final class GameScene: SKScene {
         // have pressed READY.
         if isHoldingForReady {
             body.velocity = .zero
+            return
+        }
+
+        // Versus runs its own compact loop (fixed camera, match clock,
+        // hot-potato scoring) instead of the climb logic below.
+        if isVersus {
+            updateVersus(currentTime: currentTime, dt: dt, body: body)
             return
         }
 
@@ -1494,8 +1533,8 @@ final class GameScene: SKScene {
         let location = touch.location(in: cameraNode)
         // A roomy hit box — mid-game-over is no time for precision tapping.
         guard button.frame.insetBy(dx: -20, dy: -20).contains(location) else { return }
-        if isCoop, peerConnected {
-            // Shared runs wait for BOTH players' buttons.
+        if multiplayerEnabled, peerConnected {
+            // Shared rounds wait for BOTH players' buttons.
             handleLocalReadyTap(on: button)
         } else {
             awaitingRestart = false
@@ -1543,7 +1582,7 @@ final class GameScene: SKScene {
 
     /// The other player pressed READY / TRY AGAIN.
     private func receivePeerReady() {
-        guard isCoop else { return }
+        guard multiplayerEnabled else { return }
         peerReady = true
         maybeBeginCoopRun()
     }
@@ -1590,6 +1629,493 @@ final class GameScene: SKScene {
             label.fontSize = 15
         }
         maybeBeginCoopRun()
+    }
+
+    // MARK: - Versus mode (hot potato: hold the ball LESS to win)
+
+    /// One fixed screen: a walled court with 1–2 gaps, maze bars and
+    /// bumpers in the way. Push the ball out through a gap and it lands on
+    /// the opponent's screen. After 60 seconds, whoever held the ball the
+    /// shorter time wins.
+    private func startVersusRound() {
+        removeAllActions()
+        removeAllChildren()
+        cameraNode.removeAllChildren()
+        floorTiles.removeAll()
+        versusObstacleNodes.removeAll()
+        isAirborne = false
+        isFalling = false
+        isTransitioning = false
+        awaitingRestart = false
+        tryAgainButton = nil
+        isHoldingForReady = false
+        lastUpdateTime = nil
+        matchStartTime = nil
+        myHoldTime = 0
+        matchOver = false
+        peerHoldReported = nil
+        versusResultShown = false
+
+        worldRect = CGRect(origin: .zero, size: size)
+        startPosition = CGPoint(x: worldRect.midX, y: worldRect.midY)
+
+        camera = cameraNode
+        addChild(cameraNode)
+        cameraNode.position = startPosition
+
+        setUpFloor()
+        addChild(wallsNode)
+        regenerateVersusLayout(clearPoint: nil)
+
+        ballIsHere = !(peerConnected && !multipeer.isPrimary)
+        ball.isHidden = !ballIsHere
+        shadow.isHidden = !ballIsHere
+        ball.removeAllActions()
+        ball.setScale(1)
+        ball.alpha = 1
+        ball.position = startPosition
+        ball.physicsBody?.velocity = .zero
+        addChild(ball)
+
+        shadow.removeAllActions()
+        shadow.setScale(1)
+        shadow.alpha = 1
+        shadow.zPosition = 5
+        shadow.position = startPosition
+        addChild(shadow)
+
+        setUpVersusHUD()
+    }
+
+    private func setUpVersusHUD() {
+        versusTimerLabel.text = "\(Int(GameScene.versusMatchSeconds))"
+        versusTimerLabel.fontName = "AvenirNext-Bold"
+        versusTimerLabel.fontSize = 34
+        versusTimerLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.85)
+        versusTimerLabel.position = CGPoint(x: 0, y: size.height / 2 - 70)
+        versusTimerLabel.zPosition = 100
+        versusTimerLabel.removeFromParent()
+        cameraNode.addChild(versusTimerLabel)
+
+        versusHoldLabel.text = ""
+        versusHoldLabel.fontName = "AvenirNext-DemiBold"
+        versusHoldLabel.fontSize = 14
+        versusHoldLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.7)
+        versusHoldLabel.position = CGPoint(x: 0, y: size.height / 2 - 92)
+        versusHoldLabel.zPosition = 100
+        versusHoldLabel.removeFromParent()
+        cameraNode.addChild(versusHoldLabel)
+
+        let buildLabel = SKLabelNode(text: "build \(GameScene.buildNumber)")
+        buildLabel.fontName = "Menlo"
+        buildLabel.fontSize = 12
+        buildLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.45)
+        buildLabel.position = CGPoint(x: 0, y: -size.height / 2 + 40)
+        buildLabel.zPosition = 100
+        cameraNode.addChild(buildLabel)
+
+        connectionLabel.removeFromParent()
+        connectionLabel.fontName = "AvenirNext-DemiBold"
+        connectionLabel.fontSize = 13
+        connectionLabel.horizontalAlignmentMode = .left
+        connectionLabel.position = CGPoint(x: -size.width / 2 + 16,
+                                           y: size.height / 2 - 74)
+        connectionLabel.zPosition = 100
+        updateConnectionLabel()
+        cameraNode.addChild(connectionLabel)
+    }
+
+    /// Build (or rebuild) the court: perimeter walls with 1–2 ball-sized
+    /// gaps, a couple of maze bars, and bouncy bumpers. Called at round
+    /// start and again after every transfer, so the escape route keeps
+    /// changing. `clearPoint` (the incoming ball's entry spot) is kept
+    /// free of obstacles.
+    private func regenerateVersusLayout(clearPoint: CGPoint?) {
+        wallsNode.removeAllChildren()
+        for node in versusObstacleNodes { node.removeFromParent() }
+        versusObstacleNodes.removeAll()
+
+        // 1–2 gaps on distinct edges.
+        var gaps: [(edge: Int, range: ClosedRange<CGFloat>)] = []
+        var edges = [0, 1, 2, 3].shuffled()
+        for _ in 0..<Int.random(in: 1...2) {
+            let edge = edges.removeFirst()
+            let length = edge >= 2 ? worldRect.width : worldRect.height
+            let center = CGFloat.random(in: 0.22...0.78) * length
+            gaps.append((edge, (center - GameScene.versusGapHalf)
+                            ...(center + GameScene.versusGapHalf)))
+        }
+
+        let wallColor = SKColor(red: 0.45, green: 0.32, blue: 0.18, alpha: 1)
+        for edge in 0...3 {
+            let horizontal = edge >= 2
+            let length = horizontal ? worldRect.width : worldRect.height
+            // Wall segments = the edge minus its gaps.
+            var segments: [(CGFloat, CGFloat)] = []
+            var cursor: CGFloat = 0
+            for gap in gaps.filter({ $0.edge == edge })
+                .sorted(by: { $0.range.lowerBound < $1.range.lowerBound }) {
+                if gap.range.lowerBound > cursor {
+                    segments.append((cursor, gap.range.lowerBound))
+                }
+                cursor = gap.range.upperBound
+            }
+            if cursor < length { segments.append((cursor, length)) }
+
+            for (a, b) in segments {
+                let from: CGPoint
+                let to: CGPoint
+                switch edge {
+                case 0:
+                    from = CGPoint(x: worldRect.minX, y: a)
+                    to = CGPoint(x: worldRect.minX, y: b)
+                case 1:
+                    from = CGPoint(x: worldRect.maxX, y: a)
+                    to = CGPoint(x: worldRect.maxX, y: b)
+                case 2:
+                    from = CGPoint(x: a, y: worldRect.maxY)
+                    to = CGPoint(x: b, y: worldRect.maxY)
+                default:
+                    from = CGPoint(x: a, y: worldRect.minY)
+                    to = CGPoint(x: b, y: worldRect.minY)
+                }
+                let body = SKPhysicsBody(edgeFrom: from, to: to)
+                body.friction = 0.1
+                body.restitution = 0.6
+                let node = SKNode()
+                node.physicsBody = body
+                wallsNode.addChild(node)
+
+                // Visible wall bar, inset so it reads as the court border.
+                let thickness: CGFloat = 9
+                let bar = SKSpriteNode(
+                    color: wallColor,
+                    size: horizontal
+                        ? CGSize(width: b - a, height: thickness)
+                        : CGSize(width: thickness, height: b - a)
+                )
+                let inset = thickness / 2
+                switch edge {
+                case 0: bar.position = CGPoint(x: worldRect.minX + inset, y: (a + b) / 2)
+                case 1: bar.position = CGPoint(x: worldRect.maxX - inset, y: (a + b) / 2)
+                case 2: bar.position = CGPoint(x: (a + b) / 2, y: worldRect.maxY - inset)
+                default: bar.position = CGPoint(x: (a + b) / 2, y: worldRect.minY + inset)
+                }
+                bar.zPosition = 6
+                wallsNode.addChild(bar)
+            }
+        }
+
+        // Somewhere free of the ball spawn, the entry point, and the walls.
+        func freeSpot() -> CGPoint {
+            for _ in 0..<24 {
+                let p = CGPoint(
+                    x: worldRect.width * CGFloat.random(in: 0.16...0.84),
+                    y: worldRect.height * CGFloat.random(in: 0.18...0.82)
+                )
+                let clearOfStart = hypot(p.x - startPosition.x,
+                                         p.y - startPosition.y) > 110
+                let clearOfEntry = clearPoint.map {
+                    hypot(p.x - $0.x, p.y - $0.y) > 110
+                } ?? true
+                if clearOfStart, clearOfEntry { return p }
+            }
+            return CGPoint(x: worldRect.width * 0.25, y: worldRect.height * 0.75)
+        }
+
+        // Two maze bars the ball has to steer around…
+        for _ in 0..<2 {
+            let bar = SKSpriteNode(color: wallColor,
+                                   size: CGSize(width: 150, height: 13))
+            bar.position = freeSpot()
+            bar.zRotation = CGFloat.random(in: 0..<(2 * .pi))
+            bar.zPosition = 6
+            let body = SKPhysicsBody(rectangleOf: bar.size)
+            body.isDynamic = false
+            body.restitution = 0.5
+            body.friction = 0.2
+            bar.physicsBody = body
+            addChild(bar)
+            versusObstacleNodes.append(bar)
+        }
+
+        // …and three pinball bumpers that fling it right back.
+        for _ in 0..<3 {
+            let bumper = SKShapeNode(circleOfRadius: 22)
+            bumper.fillColor = SKColor(red: 0.86, green: 0.22, blue: 0.22, alpha: 1)
+            bumper.strokeColor = SKColor(white: 1, alpha: 0.9)
+            bumper.lineWidth = 4
+            bumper.position = freeSpot()
+            bumper.zPosition = 6
+            let body = SKPhysicsBody(circleOfRadius: 22)
+            body.isDynamic = false
+            body.restitution = 1.0
+            body.friction = 0
+            bumper.physicsBody = body
+            addChild(bumper)
+            versusObstacleNodes.append(bumper)
+        }
+    }
+
+    /// The versus frame: match clock, hot-potato accounting, steering,
+    /// hop, and escape detection.
+    private func updateVersus(currentTime: TimeInterval, dt: CGFloat,
+                              body: SKPhysicsBody) {
+        shadow.position = CGPoint(x: ball.position.x, y: ball.position.y - 4)
+
+        if matchOver {
+            body.velocity = .zero
+            return
+        }
+
+        // The clock only runs against a live opponent; alone it's practice.
+        if peerConnected, matchStartTime == nil {
+            matchStartTime = currentTime
+        }
+        let elapsed = matchStartTime.map { currentTime - $0 } ?? 0
+        if peerConnected, ballIsHere {
+            myHoldTime += TimeInterval(dt)
+        }
+
+        let remaining = max(0, GameScene.versusMatchSeconds - elapsed)
+        versusTimerLabel.text = String(Int(ceil(remaining)))
+        if peerConnected {
+            let theirHold = max(0, elapsed - myHoldTime)
+            versusHoldLabel.text = L10n.t(
+                String(format: "もってた時間  きみ %.1f ・ あいて %.1f（少ないほうが勝ち）",
+                       myHoldTime, theirHold),
+                String(format: "Held  you %.1f ・ them %.1f (less wins)",
+                       myHoldTime, theirHold)
+            )
+        } else {
+            versusHoldLabel.text = L10n.t("れんしゅう中（あいてをさがしています）",
+                                          "Practice (looking for an opponent)")
+        }
+
+        if peerConnected, elapsed >= GameScene.versusMatchSeconds {
+            finishVersusMatch()
+            return
+        }
+
+        guard ballIsHere else { return }
+
+        // Hop over a bumper with a quick upward pop of the phone.
+        if !isAirborne, !isFalling,
+           currentTime - lastHopTime > GameScene.hopCooldown,
+           let jerk = motion.deviceMotion?.userAcceleration.z,
+           jerk > GameScene.hopThreshold {
+            lastHopTime = currentTime
+            hop()
+        }
+
+        // Escaped through a gap: the ball is the opponent's problem now.
+        let r = GameScene.ballRadius
+        var exitEdge: Int?
+        var fraction: CGFloat = 0
+        if ball.position.x < worldRect.minX - r {
+            exitEdge = 0
+            fraction = (ball.position.y - worldRect.minY) / worldRect.height
+        } else if ball.position.x > worldRect.maxX + r {
+            exitEdge = 1
+            fraction = (ball.position.y - worldRect.minY) / worldRect.height
+        } else if ball.position.y > worldRect.maxY + r {
+            exitEdge = 2
+            fraction = (ball.position.x - worldRect.minX) / worldRect.width
+        } else if ball.position.y < worldRect.minY - r {
+            exitEdge = 3
+            fraction = (ball.position.x - worldRect.minX) / worldRect.width
+        }
+        if let edge = exitEdge {
+            if peerConnected {
+                sendVersusBall(edge: edge, fraction: fraction, body: body)
+            } else {
+                // Practice: bring it back to the middle.
+                ball.position = startPosition
+                body.velocity = .zero
+            }
+            return
+        }
+
+        // Tilt steering, same feel as the climb.
+        if !isAirborne, var tilt = currentTilt() {
+            if abs(tilt.dx) < GameScene.deadZone { tilt.dx = 0 }
+            if abs(tilt.dy) < GameScene.deadZone { tilt.dy = 0 }
+
+            var target = CGVector(
+                dx: tilt.dx * GameScene.speedPerTilt,
+                dy: tilt.dy * GameScene.speedPerTilt
+            )
+            let speed = hypot(target.dx, target.dy)
+            if speed > GameScene.maxSpeed {
+                target.dx *= GameScene.maxSpeed / speed
+                target.dy *= GameScene.maxSpeed / speed
+            }
+
+            let blend = min(1, GameScene.responsiveness * dt)
+            var deltaX = (target.dx - body.velocity.dx) * blend
+            var deltaY = (target.dy - body.velocity.dy) * blend
+            let maxDelta = GameScene.maxAcceleration * dt
+            let delta = hypot(deltaX, deltaY)
+            if delta > maxDelta, delta > 0 {
+                deltaX *= maxDelta / delta
+                deltaY *= maxDelta / delta
+            }
+            body.velocity = CGVector(
+                dx: body.velocity.dx + deltaX,
+                dy: body.velocity.dy + deltaY
+            )
+        }
+
+        scrollSurfacePattern(velocity: body.velocity, dt: dt)
+    }
+
+    /// Ship the escaped ball to the opponent and reshuffle this court.
+    private func sendVersusBall(edge: Int, fraction: CGFloat,
+                                body: SKPhysicsBody) {
+        let transfer = VersusTransfer(
+            edge: edge,
+            fraction: Double(min(max(fraction, 0), 1)),
+            velocityDX: Double(body.velocity.dx),
+            velocityDY: Double(body.velocity.dy),
+            colorIndex: displayedColorIndex,
+            patternIndex: displayedPatternIndex,
+            skinPNG: displayedPatternIndex == BallPattern.custom.rawValue
+                ? displayedSkinData : nil
+        )
+        multipeer.send(.versusTransfer(transfer))
+
+        ballIsHere = false
+        ball.isHidden = true
+        shadow.isHidden = true
+        body.velocity = .zero
+        ball.position = startPosition
+
+        // The escape route moves every time the ball changes screens.
+        regenerateVersusLayout(clearPoint: nil)
+    }
+
+    /// The opponent pushed the ball through: it enters on the mirrored
+    /// edge with its speed intact, onto a freshly shuffled court.
+    private func receiveVersusBall(_ transfer: VersusTransfer) {
+        guard isVersus, !matchOver else { return }
+
+        let margin = GameScene.ballRadius * 1.6
+        let f = CGFloat(min(max(transfer.fraction, 0), 1))
+        let entry: CGPoint
+        switch transfer.edge {
+        case 0: // left exit → right entry
+            entry = CGPoint(x: worldRect.maxX - margin,
+                            y: worldRect.minY + f * worldRect.height)
+        case 1:
+            entry = CGPoint(x: worldRect.minX + margin,
+                            y: worldRect.minY + f * worldRect.height)
+        case 2: // top exit → bottom entry
+            entry = CGPoint(x: worldRect.minX + f * worldRect.width,
+                            y: worldRect.minY + margin)
+        default:
+            entry = CGPoint(x: worldRect.minX + f * worldRect.width,
+                            y: worldRect.maxY - margin)
+        }
+
+        regenerateVersusLayout(clearPoint: entry)
+
+        displayedColorIndex = transfer.colorIndex
+        displayedPatternIndex = transfer.patternIndex
+        displayedSkinData = transfer.skinPNG
+        applyDisplayedStyle()
+
+        ballIsHere = true
+        isAirborne = false
+        isFalling = false
+        ball.removeAllActions()
+        shadow.removeAllActions()
+        ball.setScale(1)
+        ball.alpha = 1
+        shadow.setScale(1)
+        shadow.alpha = 1
+        ball.isHidden = false
+        shadow.isHidden = false
+        ball.position = entry
+        ball.physicsBody?.velocity = CGVector(dx: transfer.velocityDX,
+                                              dy: transfer.velocityDY)
+    }
+
+    /// Time! Freeze, swap hold times, and settle the winner.
+    private func finishVersusMatch() {
+        matchOver = true
+        ball.physicsBody?.velocity = .zero
+        multipeer.send(.versusResult(holdSeconds: myHoldTime))
+
+        if let theirs = peerHoldReported {
+            showVersusResult(theirHold: theirs)
+        } else {
+            // If the peer's number never arrives, fall back to our own
+            // bookkeeping (their hold ≈ the rest of the match).
+            run(.sequence([
+                .wait(forDuration: 2.5),
+                .run { [weak self] in
+                    guard let self, !self.versusResultShown else { return }
+                    self.showVersusResult(theirHold:
+                        max(0, GameScene.versusMatchSeconds - self.myHoldTime))
+                },
+            ]), withKey: "versusResultTimeout")
+        }
+    }
+
+    private func receiveVersusResult(holdSeconds: Double) {
+        guard isVersus else { return }
+        peerHoldReported = holdSeconds
+        if matchOver, !versusResultShown {
+            showVersusResult(theirHold: holdSeconds)
+        }
+    }
+
+    private func showVersusResult(theirHold: Double) {
+        versusResultShown = true
+        removeAction(forKey: "versusResultTimeout")
+        goalHaptic.notificationOccurred(.success)
+
+        let mine = myHoldTime
+        let title: String
+        let color: SKColor
+        if abs(mine - theirHold) < 0.3 {
+            title = L10n.t("ひきわけ！", "DRAW!")
+            color = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 1)
+        } else if mine < theirHold {
+            title = L10n.t("きみのかち！", "YOU WIN!")
+            color = SKColor(red: 0.85, green: 0.55, blue: 0.10, alpha: 1)
+        } else {
+            title = L10n.t("まけちゃった…", "YOU LOSE…")
+            color = SKColor(red: 0.45, green: 0.30, blue: 0.25, alpha: 1)
+        }
+
+        let banner = SKLabelNode(text: title)
+        banner.fontName = "AvenirNext-Bold"
+        banner.fontSize = 38
+        banner.fontColor = color
+        banner.position = CGPoint(x: 0, y: 20)
+        banner.zPosition = 100
+        banner.setScale(0.1)
+        cameraNode.addChild(banner)
+        let popIn = SKAction.scale(to: 1.0, duration: 0.3)
+        popIn.timingMode = .easeOut
+        banner.run(popIn)
+
+        let sub = SKLabelNode(text: L10n.t(
+            String(format: "きみ %.1f秒 ・ あいて %.1f秒", mine, theirHold),
+            String(format: "You %.1fs ・ Them %.1fs", mine, theirHold)
+        ))
+        sub.fontName = "AvenirNext-DemiBold"
+        sub.fontSize = 17
+        sub.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.75)
+        sub.position = CGPoint(x: 0, y: -14)
+        sub.zPosition = 100
+        cameraNode.addChild(sub)
+
+        let button = makeGateButton(text: L10n.t("もういちど", "REMATCH"))
+        cameraNode.addChild(button)
+        tryAgainButton = button
+        awaitingRestart = true
     }
 
     // MARK: - Vertical drop between phones (Milestone 4)
@@ -2517,9 +3043,29 @@ enum PeerMessage: Codable {
     case coopSync(heightOffset: Double, heightVelocity: Double, scoreMeters: Int)
     /// Co-op: the shared run ended on the sender's screen.
     case runOver(scoreMeters: Int)
-    /// Co-op: this player pressed READY / TRY AGAIN. The run (re)starts
-    /// once both phones have sent one.
+    /// Co-op/versus: this player pressed READY / TRY AGAIN. The round
+    /// (re)starts once both phones have sent one.
     case readyToStart
+    /// Versus: the ball slipped through a wall gap onto the opponent's
+    /// screen.
+    case versusTransfer(VersusTransfer)
+    /// Versus: the sender's 60-second clock ran out; here is how long they
+    /// held the ball. Each phone compares the two numbers to pick a winner.
+    case versusResult(holdSeconds: Double)
+}
+
+/// Everything the ball carries when it escapes to the opponent's screen.
+struct VersusTransfer: Codable {
+    /// The edge it left through: 0 left, 1 right, 2 top, 3 bottom. It
+    /// enters the opponent's screen on the mirrored edge.
+    let edge: Int
+    /// Position along that edge (0...1).
+    let fraction: Double
+    let velocityDX: Double
+    let velocityDY: Double
+    let colorIndex: Int
+    let patternIndex: Int
+    let skinPNG: Data?
 }
 
 /// Everything the ball carries when it rolls to the neighboring phone.
