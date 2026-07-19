@@ -269,7 +269,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 52
+    private static let buildNumber = 53
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -1985,31 +1985,22 @@ final class GameScene: SKScene {
             wallsNode.addChild(marker)
         }
 
-        // Somewhere free of the ball spawn, the entry point, and the walls.
-        func freeSpot() -> CGPoint {
-            for _ in 0..<24 {
-                let p = CGPoint(
-                    x: worldRect.width * CGFloat.random(in: 0.16...0.84),
-                    y: worldRect.height * CGFloat.random(in: 0.18...0.82)
-                )
-                let clearOfStart = hypot(p.x - startPosition.x,
-                                         p.y - startPosition.y) > 110
-                let clearOfEntry = clearPoint.map {
-                    hypot(p.x - $0.x, p.y - $0.y) > 110
-                } ?? true
-                if clearOfStart, clearOfEntry { return p }
-            }
-            return CGPoint(x: worldRect.width * 0.25, y: worldRect.height * 0.75)
-        }
+        // A comb maze fills the court: full-width walls with a single
+        // doorway each, so reaching the exit means weaving through the
+        // right doors instead of rolling across open floor.
+        let mazeThickness: CGFloat = 13
+        let doorWidth = GameScene.ballRadius * 3.4
+        let rowFractions: [CGFloat] = [0.26, 0.44, 0.62, 0.80]
+        let rowYs = rowFractions.map { worldRect.height * $0 }
 
-        // Two maze bars the ball has to steer around…
-        for _ in 0..<2 {
-            let bar = SKSpriteNode(color: wallColor,
-                                   size: CGSize(width: 150, height: 13))
-            bar.position = freeSpot()
-            bar.zRotation = CGFloat.random(in: 0..<(2 * .pi))
+        func addMazeBar(center: CGPoint, size barSize: CGSize) {
+            let bar = SKShapeNode(rectOf: barSize, cornerRadius: 4)
+            bar.fillColor = wallColor
+            bar.strokeColor = SKColor(white: 1, alpha: 0.65)
+            bar.lineWidth = 1.5
+            bar.position = center
             bar.zPosition = 6
-            let body = SKPhysicsBody(rectangleOf: bar.size)
+            let body = SKPhysicsBody(rectangleOf: barSize)
             body.isDynamic = false
             body.restitution = 0.5
             body.friction = 0.2
@@ -2018,9 +2009,67 @@ final class GameScene: SKScene {
             versusObstacleNodes.append(bar)
         }
 
-        // …and three of the same mushroom bumpers the climb uses, with
-        // the same pinball kick.
-        for _ in 0..<3 {
+        for y in rowYs {
+            // One doorway per row, plus safe openings wherever the ball
+            // spawn or the incoming entry point sits on the row.
+            var openings: [ClosedRange<CGFloat>] = []
+            let doorCenter = CGFloat.random(in: 0.16...0.84) * worldRect.width
+            openings.append((doorCenter - doorWidth / 2)...(doorCenter + doorWidth / 2))
+            for special in [startPosition, clearPoint].compactMap({ $0 })
+            where abs(special.y - y) < 80 {
+                openings.append((special.x - doorWidth / 2)...(special.x + doorWidth / 2))
+            }
+
+            var cursor: CGFloat = 0
+            for opening in openings.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+                let end = min(max(opening.lowerBound, 0), worldRect.width)
+                if end - cursor > 34 {
+                    addMazeBar(
+                        center: CGPoint(x: (cursor + end) / 2, y: y),
+                        size: CGSize(width: end - cursor, height: mazeThickness)
+                    )
+                }
+                cursor = max(cursor, opening.upperBound)
+            }
+            if worldRect.width - cursor > 34 {
+                addMazeBar(
+                    center: CGPoint(x: (cursor + worldRect.width) / 2, y: y),
+                    size: CGSize(width: worldRect.width - cursor, height: mazeThickness)
+                )
+            }
+        }
+
+        // Somewhere free of the ball spawn, the entry point, and the maze
+        // rows, so props sit in the corridors instead of inside walls.
+        func freeSpot() -> CGPoint {
+            for _ in 0..<32 {
+                let p = CGPoint(
+                    x: worldRect.width * CGFloat.random(in: 0.12...0.88),
+                    y: worldRect.height * CGFloat.random(in: 0.14...0.86)
+                )
+                let clearOfStart = hypot(p.x - startPosition.x,
+                                         p.y - startPosition.y) > 110
+                let clearOfEntry = clearPoint.map {
+                    hypot(p.x - $0.x, p.y - $0.y) > 110
+                } ?? true
+                let clearOfRows = rowYs.allSatisfy { abs(p.y - $0) > 48 }
+                if clearOfStart, clearOfEntry, clearOfRows { return p }
+            }
+            return CGPoint(x: worldRect.width * 0.25, y: worldRect.height * 0.72)
+        }
+
+        // Vertical spurs between the rows turn corridors into dead ends.
+        for _ in 0..<4 {
+            addMazeBar(
+                center: freeSpot(),
+                size: CGSize(width: mazeThickness,
+                             height: CGFloat.random(in: 90...130))
+            )
+        }
+
+        // Mushroom bumpers (same pinball kick as the climb) guarding the
+        // corridors.
+        for _ in 0..<5 {
             let bumper = spawnObstacle(.bumper, at: freeSpot())
             versusObstacleNodes.append(bumper)
         }
