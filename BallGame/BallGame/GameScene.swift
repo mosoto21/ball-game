@@ -159,6 +159,8 @@ final class GameScene: SKScene {
     /// The hold time the opponent reported at match end.
     private var peerHoldReported: Double?
     private var versusResultShown = false
+    /// True once the timer entered its final-10-seconds alarm look.
+    private var versusTimerUrgent = false
     private let versusTimerLabel = SKLabelNode()
     private let versusHoldLabel = SKLabelNode()
     /// Maze bars and bumpers of the current versus board.
@@ -255,7 +257,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 49
+    private static let buildNumber = 50
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -1715,11 +1717,15 @@ final class GameScene: SKScene {
     }
 
     private func setUpVersusHUD() {
-        versusTimerLabel.text = "\(Int(GameScene.versusMatchSeconds))"
-        versusTimerLabel.fontName = "AvenirNext-Bold"
-        versusTimerLabel.fontSize = 34
-        versusTimerLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.85)
-        versusTimerLabel.position = CGPoint(x: 0, y: size.height / 2 - 70)
+        versusTimerUrgent = false
+        versusTimerLabel.removeAllActions()
+        versusTimerLabel.setScale(1)
+        versusTimerLabel.text = L10n.t("のこり \(Int(GameScene.versusMatchSeconds))秒",
+                                       "\(Int(GameScene.versusMatchSeconds))s left")
+        versusTimerLabel.fontName = "AvenirNext-Heavy"
+        versusTimerLabel.fontSize = 38
+        versusTimerLabel.fontColor = SKColor(red: 0.25, green: 0.15, blue: 0.08, alpha: 0.9)
+        versusTimerLabel.position = CGPoint(x: 0, y: size.height / 2 - 74)
         versusTimerLabel.zPosition = 100
         versusTimerLabel.removeFromParent()
         cameraNode.addChild(versusTimerLabel)
@@ -1768,19 +1774,29 @@ final class GameScene: SKScene {
         }
         versusObstacleNodes.removeAll()
 
-        // 1–2 gaps on distinct edges.
+        // 1–2 gaps on distinct edges. On the top edge the middle is out of
+        // bounds — the speaker/Dynamic Island hides it, so a gap there
+        // would be invisible.
         var gaps: [(edge: Int, range: ClosedRange<CGFloat>)] = []
         var edges = [0, 1, 2, 3].shuffled()
         for _ in 0..<Int.random(in: 1...2) {
             let edge = edges.removeFirst()
             let length = edge >= 2 ? worldRect.width : worldRect.height
-            let center = CGFloat.random(in: 0.22...0.78) * length
+            let fraction: CGFloat
+            if edge == 2 {
+                fraction = Bool.random()
+                    ? CGFloat.random(in: 0.15...0.30)
+                    : CGFloat.random(in: 0.70...0.85)
+            } else {
+                fraction = CGFloat.random(in: 0.22...0.78)
+            }
+            let center = fraction * length
             let lower = center - GameScene.versusGapHalf
             let upper = center + GameScene.versusGapHalf
             gaps.append((edge, lower...upper))
         }
 
-        let wallColor = SKColor(red: 0.45, green: 0.32, blue: 0.18, alpha: 1)
+        let wallColor = SKColor(red: 1.0, green: 0.45, blue: 0.25, alpha: 1)
         for edge in 0...3 {
             let horizontal = edge >= 2
             let length = horizontal ? worldRect.width : worldRect.height
@@ -1820,14 +1836,17 @@ final class GameScene: SKScene {
                 node.physicsBody = body
                 wallsNode.addChild(node)
 
-                // Visible wall bar, inset so it reads as the court border.
-                let thickness: CGFloat = 9
-                let bar = SKSpriteNode(
-                    color: wallColor,
-                    size: horizontal
-                        ? CGSize(width: b - a, height: thickness)
-                        : CGSize(width: thickness, height: b - a)
-                )
+                // Visible wall bar: bright orange with a white edge and a
+                // soft glow, so the border (and its missing pieces) pop.
+                let thickness: CGFloat = 14
+                let barSize = horizontal
+                    ? CGSize(width: b - a, height: thickness)
+                    : CGSize(width: thickness, height: b - a)
+                let bar = SKShapeNode(rectOf: barSize, cornerRadius: 4)
+                bar.fillColor = wallColor
+                bar.strokeColor = SKColor(white: 1, alpha: 0.9)
+                bar.lineWidth = 2
+                bar.glowWidth = 3
                 let inset = thickness / 2
                 switch edge {
                 case 0: bar.position = CGPoint(x: worldRect.minX + inset, y: (a + b) / 2)
@@ -1838,6 +1857,39 @@ final class GameScene: SKScene {
                 bar.zPosition = 6
                 wallsNode.addChild(bar)
             }
+        }
+
+        // A pulsing golden glow in each gap: THIS is the way out.
+        for gap in gaps {
+            let horizontal = gap.edge >= 2
+            let length = gap.range.upperBound - gap.range.lowerBound
+            let mid = (gap.range.lowerBound + gap.range.upperBound) / 2
+            let marker = SKShapeNode(
+                rectOf: horizontal
+                    ? CGSize(width: length, height: 18)
+                    : CGSize(width: 18, height: length),
+                cornerRadius: 9
+            )
+            marker.fillColor = SKColor(red: 1.0, green: 0.82, blue: 0.35, alpha: 0.35)
+            marker.strokeColor = SKColor(red: 1.0, green: 0.82, blue: 0.35, alpha: 0.95)
+            marker.lineWidth = 3
+            marker.glowWidth = 7
+            switch gap.edge {
+            case 0: marker.position = CGPoint(x: worldRect.minX + 9, y: mid)
+            case 1: marker.position = CGPoint(x: worldRect.maxX - 9, y: mid)
+            case 2: marker.position = CGPoint(x: mid, y: worldRect.maxY - 9)
+            default: marker.position = CGPoint(x: mid, y: worldRect.minY + 9)
+            }
+            marker.zPosition = 7
+            let pulse = SKAction.sequence([
+                .group([.scale(to: 1.15, duration: 0.5),
+                        .fadeAlpha(to: 0.55, duration: 0.5)]),
+                .group([.scale(to: 1.0, duration: 0.5),
+                        .fadeAlpha(to: 1.0, duration: 0.5)]),
+            ])
+            pulse.timingMode = .easeInEaseOut
+            marker.run(.repeatForever(pulse))
+            wallsNode.addChild(marker)
         }
 
         // Somewhere free of the ball spawn, the entry point, and the walls.
@@ -1902,7 +1954,21 @@ final class GameScene: SKScene {
         }
 
         let remaining = max(0, GameScene.versusMatchSeconds - elapsed)
-        versusTimerLabel.text = String(Int(ceil(remaining)))
+        let remainingSeconds = Int(ceil(remaining))
+        versusTimerLabel.text = L10n.t("のこり \(remainingSeconds)秒",
+                                       "\(remainingSeconds)s left")
+        // Final 10 seconds: the timer turns alarm-red and pulses.
+        if peerConnected, remaining <= 10, !versusTimerUrgent {
+            versusTimerUrgent = true
+            versusTimerLabel.fontColor = SKColor(red: 0.90, green: 0.15,
+                                                 blue: 0.10, alpha: 1)
+            let pulse = SKAction.sequence([
+                .scale(to: 1.22, duration: 0.25),
+                .scale(to: 1.0, duration: 0.25),
+            ])
+            pulse.timingMode = .easeInEaseOut
+            versusTimerLabel.run(.repeatForever(pulse), withKey: "timerPulse")
+        }
         if peerConnected {
             let theirHold = max(0, elapsed - myHoldTime)
             versusHoldLabel.text = L10n.t(
