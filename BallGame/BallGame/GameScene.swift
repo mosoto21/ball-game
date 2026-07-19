@@ -279,7 +279,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 54
+    private static let buildNumber = 55
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -2019,92 +2019,133 @@ final class GameScene: SKScene {
             wallsNode.addChild(marker)
         }
 
-        // A comb maze fills the court: full-width walls with a single
-        // doorway each, so reaching the exit means weaving through the
-        // right doors instead of rolling across open floor.
+        // A REAL maze: carve passages through a grid of cells with a
+        // randomized depth-first search, then stand a wall on every cell
+        // boundary that was not carved. Every cell stays reachable, and a
+        // few extra walls are knocked down afterwards so the maze has
+        // loops instead of one cruel single path.
         let mazeThickness: CGFloat = 13
-        let doorWidth = GameScene.ballRadius * 3.4
-        let rowFractions: [CGFloat] = [0.26, 0.44, 0.62, 0.80]
-        let rowYs = rowFractions.map { worldRect.height * $0 }
+        let cols = 4
+        let rows = 6
+        let cellW = worldRect.width / CGFloat(cols)
+        let cellH = worldRect.height / CGFloat(rows)
 
-        func addMazeBar(center: CGPoint, size barSize: CGSize) {
-            let bar = SKShapeNode(rectOf: barSize, cornerRadius: 4)
-            bar.fillColor = wallColor
-            bar.strokeColor = SKColor(white: 1, alpha: 0.65)
-            bar.lineWidth = 1.5
-            bar.position = center
-            bar.zPosition = 6
-            let body = SKPhysicsBody(rectangleOf: barSize)
+        var visited = Array(repeating: Array(repeating: false, count: rows),
+                            count: cols)
+        // Carved passages: right[c][r] joins (c,r)-(c+1,r); up joins (c,r)-(c,r+1).
+        var openRight = Array(repeating: Array(repeating: false, count: rows),
+                              count: cols)
+        var openUp = Array(repeating: Array(repeating: false, count: rows),
+                           count: cols)
+
+        var stack = [(c: Int.random(in: 0..<cols), r: Int.random(in: 0..<rows))]
+        visited[stack[0].c][stack[0].r] = true
+        while let current = stack.last {
+            var neighbors: [(c: Int, r: Int)] = []
+            if current.c > 0, !visited[current.c - 1][current.r] {
+                neighbors.append((current.c - 1, current.r))
+            }
+            if current.c < cols - 1, !visited[current.c + 1][current.r] {
+                neighbors.append((current.c + 1, current.r))
+            }
+            if current.r > 0, !visited[current.c][current.r - 1] {
+                neighbors.append((current.c, current.r - 1))
+            }
+            if current.r < rows - 1, !visited[current.c][current.r + 1] {
+                neighbors.append((current.c, current.r + 1))
+            }
+            guard let next = neighbors.randomElement() else {
+                stack.removeLast()
+                continue
+            }
+            if next.c != current.c {
+                openRight[min(current.c, next.c)][current.r] = true
+            } else {
+                openUp[current.c][min(current.r, next.r)] = true
+            }
+            visited[next.c][next.r] = true
+            stack.append(next)
+        }
+
+        func addMazeWall(center: CGPoint, size wallSize: CGSize) {
+            // Keep the spawn and the entry landing free of walls.
+            let clearances = [startPosition, clearPoint].compactMap { $0 }
+            for special in clearances
+            where abs(special.x - center.x) < (wallSize.width + 90) / 2
+                && abs(special.y - center.y) < (wallSize.height + 90) / 2 {
+                return
+            }
+            let wall = SKShapeNode(rectOf: wallSize, cornerRadius: 4)
+            wall.fillColor = wallColor
+            wall.strokeColor = SKColor(white: 1, alpha: 0.65)
+            wall.lineWidth = 1.5
+            wall.position = center
+            wall.zPosition = 6
+            let body = SKPhysicsBody(rectangleOf: wallSize)
             body.isDynamic = false
             body.restitution = 0.5
             body.friction = 0.2
-            bar.physicsBody = body
-            addChild(bar)
-            versusObstacleNodes.append(bar)
+            wall.physicsBody = body
+            addChild(wall)
+            versusObstacleNodes.append(wall)
         }
 
-        for y in rowYs {
-            // One doorway per row, plus safe openings wherever the ball
-            // spawn or the incoming entry point sits on the row.
-            var openings: [ClosedRange<CGFloat>] = []
-            let doorCenter = CGFloat.random(in: 0.16...0.84) * worldRect.width
-            openings.append((doorCenter - doorWidth / 2)...(doorCenter + doorWidth / 2))
-            for special in [startPosition, clearPoint].compactMap({ $0 })
-            where abs(special.y - y) < 80 {
-                openings.append((special.x - doorWidth / 2)...(special.x + doorWidth / 2))
+        // Uncarved boundaries become walls — minus a few random knockouts
+        // (loops) so there is usually more than one way around.
+        for c in 0..<(cols - 1) {
+            for r in 0..<rows where !openRight[c][r] {
+                guard CGFloat.random(in: 0...1) > 0.18 else { continue }
+                addMazeWall(
+                    center: CGPoint(x: CGFloat(c + 1) * cellW,
+                                    y: (CGFloat(r) + 0.5) * cellH),
+                    size: CGSize(width: mazeThickness,
+                                 height: cellH + mazeThickness)
+                )
             }
-
-            var cursor: CGFloat = 0
-            for opening in openings.sorted(by: { $0.lowerBound < $1.lowerBound }) {
-                let end = min(max(opening.lowerBound, 0), worldRect.width)
-                if end - cursor > 34 {
-                    addMazeBar(
-                        center: CGPoint(x: (cursor + end) / 2, y: y),
-                        size: CGSize(width: end - cursor, height: mazeThickness)
-                    )
-                }
-                cursor = max(cursor, opening.upperBound)
-            }
-            if worldRect.width - cursor > 34 {
-                addMazeBar(
-                    center: CGPoint(x: (cursor + worldRect.width) / 2, y: y),
-                    size: CGSize(width: worldRect.width - cursor, height: mazeThickness)
+        }
+        for c in 0..<cols {
+            for r in 0..<(rows - 1) where !openUp[c][r] {
+                guard CGFloat.random(in: 0...1) > 0.18 else { continue }
+                addMazeWall(
+                    center: CGPoint(x: (CGFloat(c) + 0.5) * cellW,
+                                    y: CGFloat(r + 1) * cellH),
+                    size: CGSize(width: cellW + mazeThickness,
+                                 height: mazeThickness)
                 )
             }
         }
 
-        // Somewhere free of the ball spawn, the entry point, and the maze
-        // rows, so props sit in the corridors instead of inside walls.
-        func freeSpot() -> CGPoint {
+        // Props live at cell centers — the middle of a corridor, never
+        // inside a wall — one per cell.
+        var occupiedSpots: [CGPoint] = []
+        func randomCellCenter() -> CGPoint {
             for _ in 0..<32 {
                 let p = CGPoint(
-                    x: worldRect.width * CGFloat.random(in: 0.12...0.88),
-                    y: worldRect.height * CGFloat.random(in: 0.14...0.86)
+                    x: (CGFloat(Int.random(in: 0..<cols)) + 0.5) * cellW,
+                    y: (CGFloat(Int.random(in: 0..<rows)) + 0.5) * cellH
                 )
                 let clearOfStart = hypot(p.x - startPosition.x,
                                          p.y - startPosition.y) > 110
                 let clearOfEntry = clearPoint.map {
                     hypot(p.x - $0.x, p.y - $0.y) > 110
                 } ?? true
-                let clearOfRows = rowYs.allSatisfy { abs(p.y - $0) > 48 }
-                if clearOfStart, clearOfEntry, clearOfRows { return p }
+                let clearOfOthers = occupiedSpots.allSatisfy {
+                    hypot(p.x - $0.x, p.y - $0.y) > 60
+                }
+                if clearOfStart, clearOfEntry, clearOfOthers {
+                    occupiedSpots.append(p)
+                    return p
+                }
             }
-            return CGPoint(x: worldRect.width * 0.25, y: worldRect.height * 0.72)
+            let fallback = CGPoint(x: cellW / 2, y: cellH / 2)
+            occupiedSpots.append(fallback)
+            return fallback
         }
 
-        // Vertical spurs between the rows turn corridors into dead ends.
+        // Mushroom bumpers (same pinball kick as the climb) lurking in
+        // the corridors.
         for _ in 0..<4 {
-            addMazeBar(
-                center: freeSpot(),
-                size: CGSize(width: mazeThickness,
-                             height: CGFloat.random(in: 90...130))
-            )
-        }
-
-        // Mushroom bumpers (same pinball kick as the climb) guarding the
-        // corridors.
-        for _ in 0..<5 {
-            let bumper = spawnObstacle(.bumper, at: freeSpot())
+            let bumper = spawnObstacle(.bumper, at: randomCellCenter())
             versusObstacleNodes.append(bumper)
         }
 
@@ -2115,7 +2156,7 @@ final class GameScene: SKScene {
         for _ in 0..<Int.random(in: 1...2) {
             let hole = SKSpriteNode(
                 texture: GameScene.holeTexture(radius: GameScene.holeRadius))
-            hole.position = freeSpot()
+            hole.position = randomCellCenter()
             hole.zPosition = 2
             addChild(hole)
             versusHoles.append(hole)
