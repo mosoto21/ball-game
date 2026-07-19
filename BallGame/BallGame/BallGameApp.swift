@@ -201,11 +201,19 @@ struct MenuView: View {
                     ) { onSelect(.solo) }
 
                     modeButton(
-                        title: L10n.t("ふたりであそぶ", "Play Together"),
-                        subtitle: L10n.t("近くのiPhoneと自動でつながる\nよこにならべると はしからパス\nしたにかまえると 落ちたボールをキャッチ",
-                                          "Auto-connects to a nearby iPhone\nSide by side: pass across the edges\nHold one underneath: catch a falling ball"),
+                        title: L10n.t("きょうりょくモード", "Co-op"),
+                        subtitle: L10n.t("ふたりでひとつのボールをはこぶ\nスコアもカメラもふたりで共有\nよこパス・下でキャッチもできる",
+                                          "Two phones, one shared ball\nShared score and camera\nSide passes and underneath catches"),
                         icon: "person.2.fill"
-                    ) { onSelect(.multiplayer) }
+                    ) { onSelect(.coop) }
+
+                    modeButton(
+                        title: L10n.t("たいせんモード", "Versus"),
+                        subtitle: L10n.t("じゅんびちゅう…おたのしみに！",
+                                          "Coming soon…"),
+                        icon: "flag.checkered.2.crossed",
+                        disabled: true
+                    ) {}
                 }
                 .padding(.horizontal, 32)
             }
@@ -213,6 +221,7 @@ struct MenuView: View {
     }
 
     private func modeButton(title: String, subtitle: String, icon: String,
+                            disabled: Bool = false,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 14) {
@@ -238,8 +247,10 @@ struct MenuView: View {
                     .fill(.white.opacity(0.75))
                     .shadow(color: .black.opacity(0.12), radius: 6, y: 4)
             )
+            .opacity(disabled ? 0.45 : 1)
         }
         .buttonStyle(.plain)
+        .disabled(disabled)
     }
 }
 

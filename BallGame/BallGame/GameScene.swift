@@ -127,7 +127,12 @@ final class GameScene: SKScene {
     /// passes across the open edges, stacked it drops through holes to the
     /// phone below. (Devices without UWB fall back to side-by-side play.)
     enum PlayMode {
-        case solo, multiplayer
+        /// The classic climb, alone, with the collapse hunting from below.
+        case solo
+        /// Two phones, one shared ball, one shared score. No collapse.
+        case coop
+        /// Head-to-head (rules to be designed; not selectable yet).
+        case versus
     }
 
     /// Where the other phone physically sits right now, from UWB direction
@@ -138,6 +143,13 @@ final class GameScene: SKScene {
 
     private var playMode = PlayMode.solo
     private var multiplayerEnabled: Bool { playMode != .solo }
+    private var isCoop: Bool { playMode == .coop }
+
+    /// Co-op, while the ball is on the other phone: the camera height the
+    /// peer last reported, which this screen glides toward.
+    private var remoteCameraTargetY: CGFloat?
+    /// Last time a coopSync message went out (throttled to ~12 Hz).
+    private var lastCoopSyncTime: TimeInterval = 0
     private var peerConnected = false
     /// UWB ranging against the connected peer.
     private let nearby = NearbyPlacementManager()
@@ -209,7 +221,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 44
+    private static let buildNumber = 45
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -301,6 +313,10 @@ final class GameScene: SKScene {
             case .drop(let drop): self?.receiveFallingBall(drop)
             case .dropResult(let caught): self?.handleDropResult(caught: caught)
             case .uwbToken(let data): self?.nearby.receivePeerToken(data)
+            case .coopSync(let offset, let score):
+                self?.receiveCoopSync(heightOffset: offset, scoreMeters: score)
+            case .runOver(let score): self?.receivePeerRunOver(scoreMeters: score)
+            case .restartRun: self?.receivePeerRestart()
             }
         }
         nearby.onTokenReady = { [weak self] data in
@@ -331,6 +347,7 @@ final class GameScene: SKScene {
         isDropGrace = false
         awaitingRestart = false
         tryAgainButton = nil
+        remoteCameraTargetY = nil
         lastUpdateTime = nil
 
         worldRect = CGRect(x: 0, y: 0, width: size.width,
@@ -349,10 +366,13 @@ final class GameScene: SKScene {
         setUpFloor()
         setUpCollapse()
 
-        // Ball and shadow return at the bottom.
-        ballIsHere = true
-        ball.isHidden = false
-        shadow.isHidden = false
+        // Ball and shadow return at the bottom. Co-op shares ONE ball:
+        // while connected, only the primary phone (decided by the same
+        // name comparison that drives the connection) starts with it —
+        // the other screen waits until the ball rolls or drops over.
+        ballIsHere = !(isCoop && peerConnected && !multipeer.isPrimary)
+        ball.isHidden = !ballIsHere
+        shadow.isHidden = !ballIsHere
         ball.removeAllActions()
         ball.setScale(1)
         ball.alpha = 1
@@ -1027,6 +1047,12 @@ final class GameScene: SKScene {
                 startRun()
                 return
             }
+            // Co-op: a fresh shared run begins the moment the phones
+            // connect — one ball, on the primary phone only.
+            if peerConnected, isCoop {
+                startRun()
+                return
+            }
         }
 
         // The arrangement is live: follow it frame to frame. Side passing
@@ -1041,6 +1067,21 @@ final class GameScene: SKScene {
         if wantSidePass != sidePassOpen {
             sidePassOpen = wantSidePass
             rebuildWalls()
+        }
+
+        // Co-op, ball on the other phone: this camera glides to the height
+        // the friend's screen reports, so both players watch the same
+        // stretch of the climb. The course keeps generating under the
+        // borrowed camera so there's something to look at (and to land on).
+        if isCoop, !ballIsHere, let target = remoteCameraTargetY {
+            let halfHeight = size.height / 2
+            let clamped = min(max(target, worldRect.minY + halfHeight),
+                              worldRect.maxY - halfHeight)
+            let blend = min(1, 10 * dt)
+            cameraNode.position.y += (clamped - cameraNode.position.y) * blend
+            generateBands(upTo: cameraNode.position.y + size.height * 1.8)
+            pruneBands(below: cameraNode.position.y - size.height * 2)
+            layoutFloorTiles()
         }
 
         guard ballIsHere else { return }
@@ -1150,6 +1191,17 @@ final class GameScene: SKScene {
         scrollSurfacePattern(velocity: body.velocity, dt: dt)
         followBallWithCamera()
         layoutFloorTiles()
+
+        // Co-op: stream this camera's height and the shared score to the
+        // watching phone, ~12 times a second.
+        if isCoop, peerConnected,
+           currentTime - lastCoopSyncTime > 0.08 {
+            lastCoopSyncTime = currentTime
+            multipeer.send(.coopSync(
+                heightOffset: Double(cameraNode.position.y - runStartY),
+                scoreMeters: scoreMeters
+            ), reliable: false)
+        }
     }
 
     /// Keep the ball in view, clamping so the camera never shows past the
@@ -1312,18 +1364,16 @@ final class GameScene: SKScene {
     }
 
     /// Game over: sink into the dark, show the score, save the best, and
-    /// start a fresh run.
+    /// wait for TRY AGAIN. In co-op the run is shared, so the other phone
+    /// is told to show the same screen.
     private func endRun() {
         isTransitioning = true
         isFalling = true
         fallHaptic.impactOccurred()
         ball.physicsBody?.velocity = .zero
 
-        let finalScore = scoreMeters
-        let isNewBest = finalScore > bestScore
-        if isNewBest {
-            bestScore = finalScore
-            UserDefaults.standard.set(bestScore, forKey: "bestScore")
+        if isCoop, peerConnected {
+            multipeer.send(.runOver(scoreMeters: scoreMeters))
         }
 
         let sink = SKAction.group([
@@ -1333,6 +1383,18 @@ final class GameScene: SKScene {
         sink.timingMode = .easeIn
         ball.run(sink)
         shadow.run(.fadeOut(withDuration: 0.2))
+
+        showGameOver(finalScore: scoreMeters)
+    }
+
+    /// The score banner and TRY AGAIN button, shown on both phones in
+    /// co-op — whoever taps the button restarts the run for everyone.
+    private func showGameOver(finalScore: Int) {
+        let isNewBest = finalScore > bestScore
+        if isNewBest {
+            bestScore = finalScore
+            UserDefaults.standard.set(bestScore, forKey: "bestScore")
+        }
 
         let banner = SKLabelNode(
             text: L10n.t("スコア \(finalScore) m", "SCORE \(finalScore) m"))
@@ -1393,6 +1455,51 @@ final class GameScene: SKScene {
         guard button.frame.insetBy(dx: -20, dy: -20).contains(location) else { return }
         awaitingRestart = false
         tryAgainButton = nil
+        // Co-op: one tap restarts the shared run on both phones.
+        if isCoop, peerConnected {
+            multipeer.send(.restartRun)
+        }
+        startRun()
+    }
+
+    // MARK: - Co-op shared run (one ball, one camera, one score)
+
+    /// The phone holding the ball reported its camera height and score.
+    private func receiveCoopSync(heightOffset: Double, scoreMeters score: Int) {
+        guard isCoop else { return }
+        remoteCameraTargetY = runStartY + CGFloat(heightOffset)
+        // The score is shared: never let the display fall behind the peer.
+        let sharedHeight = runStartY + CGFloat(score) * GameScene.pointsPerMeter
+        if sharedHeight > maxHeight {
+            maxHeight = sharedHeight
+            scoreLabel.text = "\(score) m"
+        }
+    }
+
+    /// The shared run ended on the other phone: freeze and show the same
+    /// game-over screen here.
+    private func receivePeerRunOver(scoreMeters score: Int) {
+        guard isCoop, !awaitingRestart else { return }
+        isTransitioning = true
+        isFalling = true
+        fallHaptic.impactOccurred()
+        ball.physicsBody?.velocity = .zero
+        if ballIsHere {
+            // Rare crossfire (both phones ended at once): sink this ball too.
+            let sink = SKAction.group([
+                .scale(to: 0.08, duration: 0.35),
+                .fadeOut(withDuration: 0.35),
+            ])
+            sink.timingMode = .easeIn
+            ball.run(sink)
+            shadow.run(.fadeOut(withDuration: 0.2))
+        }
+        showGameOver(finalScore: max(score, scoreMeters))
+    }
+
+    /// TRY AGAIN was tapped on the other phone: restart together.
+    private func receivePeerRestart() {
+        guard isCoop else { return }
         startRun()
     }
 
@@ -2315,6 +2422,14 @@ enum PeerMessage: Codable {
     /// An NIDiscoveryToken (archived) so the two phones can range each
     /// other over UWB and learn their physical arrangement.
     case uwbToken(Data)
+    /// Co-op: the phone holding the ball streams its camera height (as an
+    /// offset from the run start) and the shared score, so the other
+    /// screen scrolls along and shows the same distance.
+    case coopSync(heightOffset: Double, scoreMeters: Int)
+    /// Co-op: the shared run ended on the sender's screen.
+    case runOver(scoreMeters: Int)
+    /// Co-op: TRY AGAIN was tapped on the sender's screen.
+    case restartRun
 }
 
 /// Everything the ball carries when it rolls to the neighboring phone.
@@ -2408,10 +2523,13 @@ final class MultipeerManager: NSObject {
         connectedPeerName = nil
     }
 
-    func send(_ message: PeerMessage) {
+    func send(_ message: PeerMessage, reliable: Bool = true) {
         guard !session.connectedPeers.isEmpty,
               let data = try? JSONEncoder().encode(message) else { return }
-        try? session.send(data, toPeers: session.connectedPeers, with: .reliable)
+        // High-rate streams (camera sync) go unreliable: a lost frame is
+        // replaced by the next one 100 ms later anyway.
+        try? session.send(data, toPeers: session.connectedPeers,
+                          with: reliable ? .reliable : .unreliable)
     }
 }
 
