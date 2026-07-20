@@ -168,6 +168,10 @@ final class GameScene: SKScene {
     /// Ready handshake resend timer (a lost readyToStart would otherwise
     /// leave both phones waiting forever).
     private var lastReadyResend: TimeInterval = 0
+    /// Consecutive holder-heartbeats received WHILE this phone also holds
+    /// the ball. A sustained streak means a reclaim raced a delayed
+    /// transfer and the ball got duplicated — the secondary then yields.
+    private var doubleBallSyncCount = 0
     private var versusResultShown = false
     /// True once the timer entered its final-10-seconds alarm look.
     private var versusTimerUrgent = false
@@ -279,7 +283,7 @@ final class GameScene: SKScene {
     // MARK: - Tuning
 
     /// Bumped on every code change so a stale build is obvious on screen.
-    private static let buildNumber = 55
+    private static let buildNumber = 56
 
     private static let ballRadius: CGFloat = 26
     /// Kirby-style direct control: the tilt sets a target velocity and the
@@ -424,6 +428,7 @@ final class GameScene: SKScene {
         remoteCameraTargetY = nil
         remoteCameraVelocityY = 0
         isHoldingForReady = false
+        doubleBallSyncCount = 0
         lastUpdateTime = nil
 
         worldRect = CGRect(x: 0, y: 0, width: size.width,
@@ -1694,10 +1699,39 @@ final class GameScene: SKScene {
 
     // MARK: - Co-op shared run (one ball, one camera, one score)
 
+    /// A holder-heartbeat arrived while we ALSO hold the ball: after a
+    /// sustained streak (not just a stale in-flight packet), the ball has
+    /// genuinely been duplicated by a reclaim racing a delayed transfer.
+    /// The secondary phone yields its copy; the primary keeps rolling.
+    /// Returns true if this phone just yielded.
+    private func resolveDoubleBallIfNeeded() -> Bool {
+        guard ballIsHere else {
+            doubleBallSyncCount = 0
+            return false
+        }
+        doubleBallSyncCount += 1
+        guard doubleBallSyncCount >= 5, !multipeer.isPrimary else { return false }
+        doubleBallSyncCount = 0
+        ballIsHere = false
+        ball.removeAllActions()
+        shadow.removeAllActions()
+        ball.isHidden = true
+        shadow.isHidden = true
+        ball.physicsBody?.velocity = .zero
+        ball.setScale(1)
+        ball.alpha = 1
+        shadow.setScale(1)
+        shadow.alpha = 1
+        isFalling = false
+        isAirborne = false
+        return true
+    }
+
     /// The phone holding the ball reported its camera height and score.
     private func receiveCoopSync(heightOffset: Double, heightVelocity: Double,
                                  scoreMeters score: Int) {
         guard isCoop else { return }
+        _ = resolveDoubleBallIfNeeded()
         remoteCameraTargetY = runStartY + CGFloat(heightOffset)
         remoteCameraVelocityY = CGFloat(heightVelocity)
         remoteSyncAge = 0
@@ -1809,6 +1843,7 @@ final class GameScene: SKScene {
         peerHoldLive = nil
         versusPeerSilence = 0
         versusResultShown = false
+        doubleBallSyncCount = 0
 
         worldRect = CGRect(origin: .zero, size: size)
         startPosition = CGPoint(x: worldRect.midX, y: worldRect.midY)
@@ -1959,6 +1994,7 @@ final class GameScene: SKScene {
                 let body = SKPhysicsBody(edgeFrom: from, to: to)
                 body.friction = 0.1
                 body.restitution = 0.6
+                body.categoryBitMask = GameScene.fenceCategory // no hopping out
                 let node = SKNode()
                 node.physicsBody = body
                 wallsNode.addChild(node)
@@ -2085,6 +2121,8 @@ final class GameScene: SKScene {
             body.isDynamic = false
             body.restitution = 0.5
             body.friction = 0.2
+            // Maze walls are tall: a hop never shortcuts the maze.
+            body.categoryBitMask = GameScene.fenceCategory
             wall.physicsBody = body
             addChild(wall)
             versusObstacleNodes.append(wall)
@@ -2147,6 +2185,18 @@ final class GameScene: SKScene {
         for _ in 0..<4 {
             let bumper = spawnObstacle(.bumper, at: randomCellCenter())
             versusObstacleNodes.append(bumper)
+        }
+
+        // Low hurdles blocking corridors — unlike the maze walls, a hop
+        // (flick the phone up) sails right over these.
+        for _ in 0..<2 {
+            let vertical = Bool.random()
+            let hurdle = spawnObstacle(
+                .hurdle(length: min(cellW, cellH) * 0.95),
+                at: randomCellCenter(),
+                rotation: vertical ? .pi / 2 : 0
+            )
+            versusObstacleNodes.append(hurdle)
         }
 
         // Floor holes: falling in pops the ball out of the same spot on
@@ -2434,11 +2484,13 @@ final class GameScene: SKScene {
     }
 
     /// The opponent's heartbeat: they still hold the ball, and this is
-    /// their hold time so far.
+    /// their hold time so far. Also the duplicate-ball detector — if we
+    /// hold one too, the secondary yields.
     private func receiveVersusSync(holdSeconds: Double) {
         guard isVersus else { return }
         versusPeerSilence = 0
         peerHoldLive = holdSeconds
+        _ = resolveDoubleBallIfNeeded()
     }
 
     /// The ball dropped into a floor hole: sink, then pop out of the same
